@@ -1,6 +1,6 @@
 // Oracle Fusion REST API
 export const ORACLE_FUSION_CONFIG = {
-  baseUrl:      'https://iaaobn.fa.ocs.oraclecloud.com/fscmRestApi/resources/11.13.18.05',
+  baseUrl:      '',
   defaultLimit: 500,
 };
 
@@ -15,12 +15,12 @@ export const APEX_DB_CONFIG = {
 // Oracle BI Publisher SOAP (for GL Balances BIP report)
 export const ORACLE_SOAP_CONFIG = {
   prod: {
-    baseUrl:  'https://iaaobn.fa.ocs.oraclecloud.com/xmlpserver/services/v2/ReportService',
+    baseUrl:  '',
     username: 'ratheesh@buimerccorp.com',
     password: 'BCL#261285',
   },
   test: {
-    baseUrl:  'https://iaaobn-test.fa.ocs.oraclecloud.com/xmlpserver/services/v2/ReportService',
+    baseUrl:  '',
     username: 'javeedindia@gmail.com',
     password: 'Bumeric2026',
   },

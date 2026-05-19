@@ -32,11 +32,11 @@ interface Step {
 }
 
 const FUSION_URLS = [
-  { label: 'Oracle Fusion Home',          value: 'https://iaaobn.fa.ocs.oraclecloud.com/fscmUI/faces/FuseWelcome' },
-  { label: 'Payables — Manage Invoices',  value: 'https://iaaobn.fa.ocs.oraclecloud.com/fscmUI/faces/FuseTaskListManagerTop?fndGlobalItemNodeId=itemNode_payables_invoices' },
-  { label: 'Payables — Manage Payments',  value: 'https://iaaobn.fa.ocs.oraclecloud.com/fscmUI/faces/FuseTaskListManagerTop?fndGlobalItemNodeId=itemNode_payables_payments' },
-  { label: 'General Ledger',             value: 'https://iaaobn.fa.ocs.oraclecloud.com/fscmUI/faces/FuseWelcome?fndGlobalItemNodeId=itemNode_general_ledger' },
-  { label: 'Suppliers',                  value: 'https://iaaobn.fa.ocs.oraclecloud.com/fscmUI/faces/FuseTaskListManagerTop?fndGlobalItemNodeId=itemNode_procurement_suppliers' },
+  { label: 'Oracle Fusion Home',          value: '' },
+  { label: 'Payables — Manage Invoices',  value: '' },
+  { label: 'Payables — Manage Payments',  value: '' },
+  { label: 'General Ledger',              value: '' },
+  { label: 'Suppliers',                   value: '' },
 ];
 
 // Injected into the webview to capture user interactions
@@ -554,8 +554,8 @@ const STEP_COLORS: Record<string, string> = { click: 'blue', input: 'green', nav
 const OracleFusion: React.FC = () => {
   const navigate = useNavigate();
   const webviewRef = useRef<any>(null);
-  const [url, setUrl] = useState(FUSION_URLS[0].value);
-  const [inputUrl, setInputUrl] = useState(FUSION_URLS[0].value);
+  const [url, setUrl] = useState('');
+  const [inputUrl, setInputUrl] = useState('');
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoFwd, setCanGoFwd] = useState(false);
   const [loading, setLoading] = useState(false);
