@@ -13,6 +13,7 @@ import {
 } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
 import ScreenshotAnnotator from '../../components/ScreenshotAnnotator';
+import AreaSelector, { SelectedRegion } from '../../components/AreaSelector';
 import {
   Document, Packer, Paragraph, Table, TableRow, TableCell,
   ImageRun, HeadingLevel, TextRun, WidthType, ShadingType,
@@ -779,6 +780,10 @@ const OracleFusion: React.FC = () => {
   const [tabModalOpen, setTabModalOpen] = useState(false);
   const [detectedTabs, setDetectedTabs] = useState<Array<{ index: number; text: string; selected: boolean; id: string }>>([]);
 
+  // --- Area selection ---
+  const [areaSelectOpen, setAreaSelectOpen]   = useState(false);
+  const [areaShotDataUrl, setAreaShotDataUrl] = useState<string>('');
+
   // --- Saved credentials ---
   const [credsModalOpen, setCredsModalOpen] = useState(false);
   const [hasSavedCreds, setHasSavedCreds] = useState(false);
@@ -1341,6 +1346,149 @@ const OracleFusion: React.FC = () => {
     }
   };
 
+  // ---- Area capture helpers ----
+  const cropImage = (dataUrl: string, r: SelectedRegion): Promise<string> =>
+    new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement('canvas');
+        c.width  = r.w;
+        c.height = r.h;
+        c.getContext('2d')!.drawImage(img, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+        resolve(c.toDataURL('image/png'));
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+
+  const handleAreaCapture = async () => {
+    const wv = webviewRef.current;
+    if (!wv) { message.warning('WebView not ready'); return; }
+    try {
+      const shot = await wv.capturePage();
+      const dataUrl = shot?.toDataURL?.() || '';
+      if (!dataUrl) { message.warning('Could not capture screenshot'); return; }
+      setAreaShotDataUrl(dataUrl);
+      setAreaSelectOpen(true);
+    } catch (e: any) { message.error('Capture failed: ' + e.message); }
+  };
+
+  const handleAreaSelected = async (region: SelectedRegion) => {
+    setAreaSelectOpen(false);
+    const wv = webviewRef.current;
+    if (!wv) return;
+    try {
+      // Get page viewport size to scale region from screenshot px → CSS px
+      const pageW: number = await wv.executeJavaScript('window.innerWidth');
+      const pageH: number = await wv.executeJavaScript('window.innerHeight');
+
+      const scX = pageW / region.naturalW;
+      const scY = pageH / region.naturalH;
+      const pgRegion = {
+        left:   region.x * scX,
+        top:    region.y * scY,
+        right:  (region.x + region.w) * scX,
+        bottom: (region.y + region.h) * scY,
+      };
+
+      // Self-contained script: extract fields whose bounding rect intersects the region
+      const raw: string = await wv.executeJavaScript(`
+        (function() {
+          var rgn = ${JSON.stringify(pgRegion)};
+          var results = [], seen = {};
+          function inRgn(el) {
+            try { var r=el.getBoundingClientRect(); return r.right>rgn.left&&r.left<rgn.right&&r.bottom>rgn.top&&r.top<rgn.bottom; } catch(e){return false;}
+          }
+          function getLabel(el) {
+            if(!el||!el.getAttribute) return '';
+            var al=el.getAttribute('aria-label'); if(al) return al.trim();
+            var alby=el.getAttribute('aria-labelledby');
+            if(alby){var tx=alby.split(' ').map(function(id){var e=document.getElementById(id);return e?e.textContent.trim():'';}).filter(Boolean).join(' ');if(tx) return tx;}
+            if(el.id){var lb=document.querySelector('label[for="'+el.id+'"]');if(lb) return lb.textContent.trim().replace(/:$/,'').trim();}
+            return (el.getAttribute('title')||el.getAttribute('placeholder')||el.name||'').trim();
+          }
+          function findLabel(el) {
+            var d=getLabel(el); if(d) return d;
+            var node=el.parentElement;
+            for(var i=0;i<8&&node;i++){
+              var prev=node.previousElementSibling;
+              if(prev){var lbl=prev.querySelector('label')||prev.querySelector('[role="label"]');if(lbl){var t=lbl.textContent.trim().replace(/:$/,'').trim();if(t&&t.length<80) return t;}var pt=prev.textContent.trim().replace(/:$/,'').trim();if(pt&&pt.length<60&&!pt.includes('\\n')&&!/^[0-9,.$%]+$/.test(pt)) return pt;}
+              var labels=node.querySelectorAll('label');for(var j=0;j<labels.length;j++){var lt=labels[j].textContent.trim().replace(/:$/,'').trim();if(lt&&lt.length<80) return lt;}
+              node=node.parentElement;
+            }
+            return '';
+          }
+          var els=Array.from(document.querySelectorAll('input,select,textarea,[role="textbox"],[role="combobox"],[role="spinbutton"]'));
+          els.forEach(function(el){
+            if(!inRgn(el)) return;
+            var tag=el.tagName.toLowerCase(),type=(el.getAttribute('type')||'text').toLowerCase();
+            if(type==='hidden'||type==='submit'||type==='button'||type==='image'||type==='reset'||type==='file') return;
+            var value='';
+            if(tag==='select') value=el.options&&el.selectedIndex>=0?(el.options[el.selectedIndex].text||el.value):el.value;
+            else if(type==='checkbox'||type==='radio'){if(!el.checked) return; value=findLabel(el)||(el.checked?'Yes':'No');}
+            else value=(el.value||el.textContent||'').trim();
+            if(!value||value.length<1) return;
+            var label=findLabel(el); if(!label||label.length<2) return;
+            if(seen[label]) return; seen[label]=true;
+            var action=tag==='select'?'Select':(type==='checkbox'||type==='radio')?'Check':'Enter';
+            results.push({type:'input',fieldName:label,action:action,value:value,description:action+' "'+value+'" in: '+label,url:location.href,pageTitle:document.title,timestamp:Date.now()});
+          });
+          var lblEls=Array.from(document.querySelectorAll('label,[class*="af_panelLabelAndMessage_label"],[class*="AFPanelFormLayoutLabel"]'));
+          lblEls.forEach(function(lbl){
+            if(!inRgn(lbl)) return;
+            var labelText=lbl.textContent.trim().replace(/:$/,'').trim();
+            if(!labelText||labelText.length<2||labelText.length>80) return;
+            if(seen[labelText]) return;
+            var parentCell=lbl.closest('td,th');
+            var valueEl=parentCell?parentCell.nextElementSibling:null;
+            if(!valueEl) valueEl=lbl.nextElementSibling;
+            if(!valueEl){var p=lbl.parentElement;if(p) valueEl=p.nextElementSibling;}
+            if(!valueEl) return;
+            var val=(valueEl.textContent||'').trim().replace(/\\s+/g,' ').trim();
+            if(!val||val.length<1||val.length>300) return;
+            if(valueEl.querySelector('input,select,textarea')) return;
+            if(/^[0-9]+$/.test(val)&&val.length<2) return;
+            seen[labelText]=true;
+            results.push({type:'input',fieldName:labelText,action:'Display',value:val,description:'Display "'+val+'" — '+labelText,url:location.href,pageTitle:document.title,timestamp:Date.now()});
+          });
+          return JSON.stringify(results);
+        })()
+      `);
+
+      const captured: any[] = JSON.parse(raw || '[]');
+      const croppedUrl = await cropImage(areaShotDataUrl, region);
+      const currentTitle = currentPageTitleRef.current ||
+        await wv.executeJavaScript('document.title').catch(() => '');
+
+      const now = Date.now();
+      const snapshotStep: Step = {
+        id: now + 'area' + Math.random(),
+        type: 'snapshot',
+        fieldName: currentTitle,
+        action: 'Snapshot',
+        value: captured.length ? `${captured.length} fields (area)` : 'area screenshot',
+        description: `Area capture: ${currentTitle}`,
+        url: wv.getURL?.() || '',
+        pageTitle: currentTitle,
+        timestamp: now,
+        screenshot: croppedUrl || undefined,
+        fields: captured.length
+          ? captured.map((s: any) => ({
+              fieldName: s.fieldName || '',
+              action: s.action || '',
+              value: s.value || '',
+              description: s.description || '',
+            }))
+          : undefined,
+      };
+
+      setSteps(prev => [...prev, snapshotStep]);
+      message.success(`Area captured${captured.length ? ` — ${captured.length} fields found` : ' (no fields in selection)'}`);
+    } catch (e: any) {
+      message.error('Area capture failed: ' + e.message);
+    }
+  };
+
   // ---- Detect tabs and ask user which one to capture ----
   const handleDetectAndCaptureTab = async () => {
     const wv = webviewRef.current;
@@ -1735,6 +1883,17 @@ const OracleFusion: React.FC = () => {
                   title="Capture tab"
                 >📑</button>
               </Tooltip>
+              <Tooltip title="Select an area — capture only fields inside your selection" placement="left">
+                <button
+                  onClick={handleAreaCapture}
+                  style={{
+                    width: 52, height: 52, borderRadius: '50%', border: 'none', cursor: 'pointer',
+                    background: '#00695c', color: '#fff', fontSize: 22, lineHeight: 1,
+                    boxShadow: '0 3px 10px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                  title="Select area"
+                >📐</button>
+              </Tooltip>
             </div>
           )}
         </div>
@@ -1940,6 +2099,15 @@ const OracleFusion: React.FC = () => {
         title="User Manual Preview"
       />
     </Modal>
+
+    {/* ── Area Selector ── */}
+    {areaSelectOpen && areaShotDataUrl && (
+      <AreaSelector
+        screenshot={areaShotDataUrl}
+        onConfirm={handleAreaSelected}
+        onCancel={() => { setAreaSelectOpen(false); setAreaShotDataUrl(''); }}
+      />
+    )}
 
     {/* ── Tab Selection Modal ── */}
     <Modal
