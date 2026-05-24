@@ -9,15 +9,16 @@ const isElectron = !!(window as any).electronAPI?.isElectron;
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const GUEST_USER: User = {
+  id: 'guest',
+  username: 'guest',
+  name: 'Guest',
+  email: 'guest@erp-studio.local',
+  role: 'User',
+};
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(() => {
-    // In Electron the file-based session is loaded asynchronously below;
-    // start with localStorage as a fast synchronous fallback.
-    try {
-      const saved = localStorage.getItem('erp_user');
-      return saved ? JSON.parse(saved) : null;
-    } catch { return null; }
-  });
+  const [user, setUser] = useState<User | null>(() => GUEST_USER);
 
   // On Electron startup, load the file-based session (overrides localStorage result
   // because it's more reliable — Chromium's quota DB can fail on some Windows machines).
