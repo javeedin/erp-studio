@@ -470,12 +470,11 @@ const generateUserManual = (steps: Step[]): string => {
     };
 
     const bodyHtml = groups.map((g, gi) => renderGroup(g, gi)).join('\n');
-    const hasAnyFields = groups.some(g => g.steps.length > 0);
-    const content = hasAnyFields
+    // hasContent is true if ANY group has a screenshot, fields, or interaction steps
+    const hasContent = groups.some(g => g.steps.length > 0 || !!g.screenshot || (g.fields?.length ?? 0) > 0);
+    const content = hasContent
       ? bodyHtml
-      : (navScreenShot
-          ? `<div style="margin:14px 0 20px;"><img src="${navScreenShot}" style="width:100%;border:1px solid #ddd;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.08);" /></div>` : '')
-        + '<p style="color:#aaa;font-size:12px;font-style:italic;">No field interactions recorded on this screen.</p>';
+      : '<p style="color:#aaa;font-size:12px;font-style:italic;">No content recorded on this screen.</p>';
 
     return `
     <section id="screen-${si}" style="margin-bottom:50px;page-break-inside:avoid;">
@@ -761,9 +760,9 @@ const OracleFusion: React.FC = () => {
   // Rolling screenshot updated every 2s while tracking — applied to steps on navigate away
   const lastScreenshotRef = useRef<string>('');
 
-  // --- Auto screenshot toggle ---
-  const [autoShot, setAutoShot] = useState(true);
-  const autoShotRef = useRef(true);
+  // --- Auto screenshot toggle (default: manual) ---
+  const [autoShot, setAutoShot] = useState(false);
+  const autoShotRef = useRef(false);
 
   // --- Annotation ---
   const [annotatingStepId, setAnnotatingStepId] = useState<string | null>(null);
@@ -937,7 +936,7 @@ const OracleFusion: React.FC = () => {
       }, 2000);
 
       pollRef.current = setInterval(async () => {
-        if (!trackingRef.current) return;
+        if (!trackingRef.current || !autoShotRef.current) return;
         try {
           const pollData = await wv.executeJavaScript(
             '({steps:(window.__reactErpSteps||[]).splice(0), title:document.title, url:location.href})'
