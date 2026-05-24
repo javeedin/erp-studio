@@ -12,6 +12,7 @@ import {
   CameraOutlined,
 } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
+import ScreenshotAnnotator from '../../components/ScreenshotAnnotator';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -571,6 +572,9 @@ const OracleFusion: React.FC = () => {
   const currentPageTitleRef = useRef<string>('');
   // Rolling screenshot updated every 2s while tracking — applied to steps on navigate away
   const lastScreenshotRef = useRef<string>('');
+
+  // --- Annotation ---
+  const [annotatingStepId, setAnnotatingStepId] = useState<string | null>(null);
 
   // --- Saved credentials ---
   const [credsModalOpen, setCredsModalOpen] = useState(false);
@@ -1278,8 +1282,26 @@ const OracleFusion: React.FC = () => {
                         <div style={{ fontSize: 12, color: '#e0e0e0', wordBreak: 'break-word', lineHeight: 1.4 }}>{s.description}</div>
                         {s.pageTitle && <div style={{ fontSize: 10, color: '#666', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.pageTitle}</div>}
                         {s.screenshot && (
-                          <img src={s.screenshot} alt={`step ${i + 1}`}
-                            style={{ width: '100%', borderRadius: 4, marginTop: 5, border: '1px solid #333' }} />
+                          <Tooltip title="Click to annotate" placement="left">
+                            <div
+                              style={{ position: 'relative', marginTop: 5, cursor: 'pointer' }}
+                              onClick={() => setAnnotatingStepId(s.id)}
+                            >
+                              <img
+                                src={s.screenshot}
+                                alt={`step ${i + 1}`}
+                                style={{ width: '100%', borderRadius: 4, border: '1px solid #333', display: 'block' }}
+                              />
+                              <div style={{
+                                position: 'absolute', top: 4, right: 4,
+                                background: 'rgba(0,0,0,0.55)', borderRadius: 3,
+                                padding: '1px 6px', fontSize: 10, color: '#fff',
+                                pointerEvents: 'none',
+                              }}>
+                                ✏ annotate
+                              </div>
+                            </div>
+                          </Tooltip>
                         )}
                       </div>
                     </div>
@@ -1370,6 +1392,22 @@ const OracleFusion: React.FC = () => {
         )}
       </Form>
     </Modal>
+    {annotatingStepId && (() => {
+      const step = steps.find(s => s.id === annotatingStepId);
+      if (!step?.screenshot) return null;
+      return (
+        <ScreenshotAnnotator
+          screenshot={step.screenshot}
+          onSave={(annotated) => {
+            setSteps(prev => prev.map(s =>
+              s.id === annotatingStepId ? { ...s, screenshot: annotated } : s
+            ));
+            setAnnotatingStepId(null);
+          }}
+          onClose={() => setAnnotatingStepId(null)}
+        />
+      );
+    })()}
     </>
   );
 };
