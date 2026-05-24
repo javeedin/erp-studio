@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Modal, Button, Tooltip, Spin } from 'antd';
+import { Modal, Button, Tooltip } from 'antd';
 import { UndoOutlined, SaveOutlined } from '@ant-design/icons';
 
 type Tool = 'pen' | 'arrow' | 'rect' | 'circle';
@@ -30,11 +30,15 @@ const TOOLS: { key: Tool; label: string }[] = [
 const WIDTHS = [2, 4, 8];
 
 const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) => {
-  const canvasRef               = useRef<HTMLCanvasElement>(null);
-  const loadedImg               = useRef<HTMLImageElement | null>(null);
-  const [ready, setReady]       = useState(false);
-  const [tool, setTool]         = useState<Tool>('arrow');
-  const [color, setColor]       = useState('#ff3333');
+  // The <img> shows the screenshot — no canvas security issues
+  const imgRef    = useRef<HTMLImageElement>(null);
+  // The canvas is transparent and floats on top — annotations only
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  const [loaded, setLoaded]       = useState(false);
+  const [dispSize, setDispSize]   = useState({ w: 0, h: 0 });
+  const [tool, setTool]           = useState<Tool>('arrow');
+  const [color, setColor]         = useState('#ff3333');
   const [lineWidth, setLineWidth] = useState(3);
   const [undoStack, setUndoStack] = useState<ImageData[]>([]);
 
@@ -42,39 +46,29 @@ const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) =
   const startPos  = useRef<{ x: number; y: number } | null>(null);
   const baseSnap  = useRef<ImageData | null>(null);
 
-  // Phase 1: load image
-  useEffect(() => {
-    const img = new Image();
-    img.onload = () => {
-      loadedImg.current = img;
-      setReady(true);
-    };
-    img.onerror = () => setReady(true); // show blank canvas on error
-    img.src = screenshot;
-  }, [screenshot]);
+  // When image loads, size the canvas to match
+  const handleImgLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img   = e.currentTarget;
+    const maxW  = Math.min(window.innerWidth * 0.82, 1100);
+    const scale = img.naturalWidth > maxW ? maxW / img.naturalWidth : 1;
+    const w     = Math.round(img.naturalWidth  * scale);
+    const h     = Math.round(img.naturalHeight * scale);
+    setDispSize({ w, h });
+    setLoaded(true);
+  };
 
-  // Phase 2: draw image onto canvas once it's loaded AND mounted
+  // Size the annotation canvas to match the image display dimensions
   useEffect(() => {
-    if (!ready || !canvasRef.current || !loadedImg.current) return;
+    if (!loaded || !canvasRef.current || dispSize.w === 0) return;
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const img = loadedImg.current;
-
-    const maxW = Math.min(window.innerWidth * 0.82, 1100);
-    const scale = img.width > maxW ? maxW / img.width : 1;
-    const w = Math.round(img.width * scale);
-    const h = Math.round(img.height * scale);
-
-    canvas.width  = w;
-    canvas.height = h;
-    ctx.drawImage(img, 0, 0, w, h);
-    baseSnap.current = ctx.getImageData(0, 0, w, h);
-  }, [ready]);
+    canvas.width  = dispSize.w;
+    canvas.height = dispSize.h;
+    // Canvas starts fully transparent — do NOT fill black
+  }, [loaded, dispSize]);
 
   const getPos = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current!;
-    const rect = canvas.getBoundingClientRect();
+    const rect   = canvas.getBoundingClientRect();
     return {
       x: (e.clientX - rect.left) * (canvas.width  / rect.width),
       y: (e.clientY - rect.top)  * (canvas.height / rect.height),
@@ -148,6 +142,7 @@ const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) =
       return;
     }
 
+    // Restore transparent base, then draw shape preview
     if (baseSnap.current) ctx.putImageData(baseSnap.current, 0, 0);
     const { x: x1, y: y1 } = startPos.current;
     const { x: x2, y: y2 } = pos;
@@ -187,22 +182,30 @@ const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) =
     setUndoStack(s => s.slice(0, -1));
   };
 
+  // Composite: draw the img onto an offscreen canvas, then draw annotations on top
   const handleSave = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    onSave(canvas.toDataURL('image/png'));
-  };
+    const img    = imgRef.current;
+    const annCanvas = canvasRef.current;
+    if (!img || !annCanvas) return;
 
-  const modalW = Math.min(
-    (loadedImg.current?.width ?? 900) + 80,
-    typeof window !== 'undefined' ? window.innerWidth - 40 : 1200,
-  );
+    const offscreen = document.createElement('canvas');
+    offscreen.width  = annCanvas.width;
+    offscreen.height = annCanvas.height;
+    const ctx = offscreen.getContext('2d')!;
+
+    // Draw the original screenshot (img element renders it correctly)
+    ctx.drawImage(img, 0, 0, annCanvas.width, annCanvas.height);
+    // Draw annotations on top (transparent canvas with just the marks)
+    ctx.drawImage(annCanvas, 0, 0);
+
+    onSave(offscreen.toDataURL('image/png'));
+  };
 
   return (
     <Modal
       open
       onCancel={onClose}
-      width={Math.max(modalW, 700)}
+      width={Math.max(Math.min(dispSize.w + 80, typeof window !== 'undefined' ? window.innerWidth - 40 : 1200), 700)}
       style={{ top: 20 }}
       destroyOnClose
       title="Annotate Screenshot"
@@ -213,7 +216,7 @@ const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) =
             type="primary"
             icon={<SaveOutlined />}
             onClick={handleSave}
-            disabled={!ready}
+            disabled={!loaded}
             style={{ background: '#1565c0', borderColor: '#1565c0' }}
           >
             Save Annotation
@@ -226,7 +229,6 @@ const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) =
         display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
         padding: '8px 0 12px', borderBottom: '1px solid #e8e8e8', marginBottom: 12,
       }}>
-        {/* Tools */}
         <div style={{ display: 'flex', gap: 4 }}>
           {TOOLS.map(t => (
             <Button
@@ -243,7 +245,6 @@ const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) =
 
         <div style={{ width: 1, height: 22, background: '#e0e0e0' }} />
 
-        {/* Colors */}
         <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
           {COLORS.map(c => (
             <Tooltip key={c.value} title={c.label} placement="bottom">
@@ -265,7 +266,6 @@ const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) =
 
         <div style={{ width: 1, height: 22, background: '#e0e0e0' }} />
 
-        {/* Line widths */}
         <div style={{ display: 'flex', gap: 4 }}>
           {WIDTHS.map(w => (
             <Tooltip key={w} title={`Size ${w}`} placement="bottom">
@@ -289,40 +289,37 @@ const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) =
         <div style={{ width: 1, height: 22, background: '#e0e0e0' }} />
 
         <Tooltip title="Undo last mark" placement="bottom">
-          <Button
-            size="small"
-            icon={<UndoOutlined />}
-            onClick={handleUndo}
-            disabled={undoStack.length === 0}
-          />
+          <Button size="small" icon={<UndoOutlined />} onClick={handleUndo} disabled={undoStack.length === 0} />
         </Tooltip>
       </div>
 
-      {/* Canvas area */}
-      <div style={{
-        overflow: 'auto',
-        maxHeight: 'calc(100vh - 280px)',
-        background: '#333',
-        borderRadius: 6,
-        display: 'flex',
-        alignItems: 'flex-start',
-        justifyContent: 'center',
-        minHeight: 200,
-      }}>
-        {!ready ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: 200 }}>
-            <Spin tip="Loading screenshot…" />
-          </div>
-        ) : (
-          <canvas
-            ref={canvasRef}
-            style={{ cursor: 'crosshair', display: 'block', maxWidth: '100%' }}
-            onMouseDown={onMouseDown}
-            onMouseMove={onMouseMove}
-            onMouseUp={onMouseUp}
-            onMouseLeave={onMouseUp}
+      {/* Screenshot + annotation canvas overlay */}
+      <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 280px)', background: '#555', borderRadius: 6 }}>
+        <div style={{ position: 'relative', display: 'inline-block', lineHeight: 0 }}>
+          {/* Original screenshot rendered by the browser — no canvas security issue */}
+          <img
+            ref={imgRef}
+            src={screenshot}
+            onLoad={handleImgLoad}
+            style={{ display: 'block', maxWidth: '100%' }}
+            alt="screenshot"
           />
-        )}
+          {/* Transparent annotation canvas sits on top */}
+          {loaded && (
+            <canvas
+              ref={canvasRef}
+              style={{
+                position: 'absolute', top: 0, left: 0,
+                width: '100%', height: '100%',
+                cursor: 'crosshair',
+              }}
+              onMouseDown={onMouseDown}
+              onMouseMove={onMouseMove}
+              onMouseUp={onMouseUp}
+              onMouseLeave={onMouseUp}
+            />
+          )}
+        </div>
       </div>
     </Modal>
   );
