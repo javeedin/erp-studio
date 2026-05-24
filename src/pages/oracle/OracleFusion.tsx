@@ -1161,15 +1161,16 @@ const OracleFusion: React.FC = () => {
         screenshot: undefined,
       }));
 
-      // Replace all non-navigate steps from this screen with the clean snapshot
+      // APPEND the new fields — never remove existing steps or screenshots
       setSteps(prev => {
-        const others = prev.filter(s => s.pageTitle !== currentTitle || s.type === 'navigate');
-        // Apply screenshot to the navigate step for this screen
-        const withShot = others.map(s =>
-          s.pageTitle === currentTitle && s.type === 'navigate' && dataUrl
-            ? { ...s, screenshot: dataUrl }
-            : s
-        );
+        // Apply the screenshot to the most recent navigate step for this screen if it has none
+        const withShot = dataUrl
+          ? prev.map(s =>
+              s.pageTitle === currentTitle && s.type === 'navigate' && !s.screenshot
+                ? { ...s, screenshot: dataUrl }
+                : s
+            )
+          : prev;
         return [...withShot, ...enriched];
       });
 
@@ -1562,7 +1563,18 @@ const OracleFusion: React.FC = () => {
                           }}>{i + 1}</span>
                         </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <Tag color={STEP_COLORS[s.type]} style={{ fontSize: 10, marginBottom: 3 }}>{s.type}</Tag>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 3 }}>
+                            <Tag color={STEP_COLORS[s.type]} style={{ fontSize: 10, margin: 0 }}>{s.type}</Tag>
+                            <span style={{ flex: 1 }} />
+                            <Tooltip title="Delete this step" placement="left">
+                              <span
+                                onClick={() => setSteps(prev => prev.filter(x => x.id !== s.id))}
+                                style={{ color: '#555', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '0 2px' }}
+                                onMouseEnter={e => (e.currentTarget.style.color = '#ff6b35')}
+                                onMouseLeave={e => (e.currentTarget.style.color = '#555')}
+                              >×</span>
+                            </Tooltip>
+                          </div>
                           <div style={{ fontSize: 11, color: '#e0e0e0', wordBreak: 'break-word', lineHeight: 1.4 }}>{s.description}</div>
                           {s.pageTitle && <div style={{ fontSize: 10, color: '#555', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.pageTitle}</div>}
                           {s.screenshot && (
