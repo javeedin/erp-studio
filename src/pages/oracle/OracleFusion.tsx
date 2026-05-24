@@ -354,9 +354,65 @@ const generateUserManual = (steps: Step[]): string => {
   const typeColor: Record<string, string> = { click: '#1565c0', input: '#2e7d32', navigate: '#e65100' };
   const typeBg:    Record<string, string> = { click: '#e3f2fd', input: '#e8f5e9', navigate: '#fff3e0' };
 
+  // Build flat step index — same group-splitting logic as renderGroup
+  type IndexRow = { num: number; screenIdx: number; screen: string; type: string; field: string; value: string };
+  const indexRows: IndexRow[] = [];
+  let idxNum = 0;
+  for (let si = 0; si < screens.length; si++) {
+    const sc = screens[si];
+    const nonNav = sc.steps.filter(s => s.type !== 'navigate');
+    const grps: { fields?: CapturedField[]; steps: (Step & { globalIdx: number })[] }[] = [];
+    let cur: { fields?: CapturedField[]; steps: (Step & { globalIdx: number })[] } = { steps: [] };
+    for (const step of nonNav) {
+      if (step.type === 'snapshot') { grps.push(cur); cur = { fields: step.fields, steps: [] }; }
+      else { cur.steps.push(step); }
+    }
+    grps.push(cur);
+    for (const g of grps) {
+      if (g.fields?.length) {
+        for (const f of g.fields) {
+          indexRows.push({ num: ++idxNum, screenIdx: si, screen: sc.title, type: f.action || 'Enter', field: f.fieldName, value: f.value });
+        }
+      } else {
+        for (const s of g.steps.filter(st => st.type === 'click' || st.type === 'input')) {
+          indexRows.push({ num: ++idxNum, screenIdx: si, screen: sc.title, type: s.type === 'input' ? 'Enter' : 'Click', field: s.fieldName || s.description, value: s.value || '' });
+        }
+      }
+    }
+  }
+
   const toc = screens.map((sc, i) =>
     `<li><a href="#screen-${i}">${escapeHtml(sc.title)}</a> <span style="color:#999">(${sc.steps.length} step${sc.steps.length !== 1 ? 's' : ''})</span></li>`
   ).join('\n');
+
+  const actionColor: Record<string, string> = { Enter: '#2e7d32', Select: '#2e7d32', Check: '#2e7d32', Click: '#1565c0', Display: '#e65100' };
+  const actionBg: Record<string, string>    = { Enter: '#e8f5e9', Select: '#e8f5e9', Check: '#e8f5e9', Click: '#e3f2fd', Display: '#fff3e0' };
+  const indexTableRows = indexRows.map(r => {
+    const c = actionColor[r.type] || '#555', bg = actionBg[r.type] || '#f5f5f5';
+    return `<tr>
+      <td style="text-align:center;font-weight:700;color:#444;">${r.num}</td>
+      <td><a href="#screen-${r.screenIdx}" style="color:${REDWOOD};text-decoration:none;font-size:12px;">${escapeHtml(r.screen)}</a></td>
+      <td><span style="display:inline-block;padding:1px 7px;border-radius:3px;font-size:10px;font-weight:700;background:${bg};color:${c}">${escapeHtml(r.type)}</span></td>
+      <td style="font-weight:600;color:#222;">${escapeHtml(r.field)}</td>
+      <td style="color:#555;">${r.value ? escapeHtml(r.value) : '—'}</td>
+    </tr>`;
+  }).join('\n');
+  const indexHtml = indexRows.length ? `
+  <div class="step-index">
+    <h3 style="margin:0 0 10px;color:#444;font-size:14px;">&#128221; Step Index (${indexRows.length} steps)</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead>
+        <tr style="background:#f0f0f0;">
+          <th style="padding:7px 10px;border-bottom:2px solid #ddd;width:36px;">#</th>
+          <th style="padding:7px 10px;border-bottom:2px solid #ddd;width:160px;">Screen</th>
+          <th style="padding:7px 10px;border-bottom:2px solid #ddd;width:64px;">Type</th>
+          <th style="padding:7px 10px;border-bottom:2px solid #ddd;">Field / Element</th>
+          <th style="padding:7px 10px;border-bottom:2px solid #ddd;width:160px;">Value</th>
+        </tr>
+      </thead>
+      <tbody>${indexTableRows}</tbody>
+    </table>
+  </div>` : '';
 
   const sectionsHtml = screens.map((sc, si) => {
     // Navigate step screenshot (shows the screen on arrival)
@@ -496,12 +552,15 @@ const generateUserManual = (steps: Step[]): string => {
   body { font-family: Segoe UI, Arial, sans-serif; max-width: 1000px; margin: 0 auto; padding: 30px; color: #333; }
   h1 { color: ${REDWOOD}; margin-bottom: 4px; }
   .meta { color: #888; font-size: 13px; margin-bottom: 20px; }
-  .toc { background:#f9f9f9; border:1px solid #e0e0e0; border-radius:8px; padding:16px 24px; margin-bottom:32px; }
+  .toc { background:#f9f9f9; border:1px solid #e0e0e0; border-radius:8px; padding:16px 24px; margin-bottom:16px; }
   .toc h3 { margin:0 0 10px; color:#444; font-size:14px; }
   .toc ol { margin:0; padding-left:20px; }
   .toc li { margin:4px 0; font-size:13px; }
   .toc a { color:${REDWOOD}; text-decoration:none; }
   .toc a:hover { text-decoration:underline; }
+  .step-index { background:#f9f9f9; border:1px solid #e0e0e0; border-radius:8px; padding:16px 24px; margin-bottom:32px; }
+  .step-index tbody tr:nth-child(even) td { background:#f4f4f4; }
+  .step-index tbody tr:hover td { background:#edf3ff; }
   tbody tr:hover td { background:#fafafa; }
   td, th { padding:9px 12px; border-bottom:1px solid #eee; vertical-align:top; text-align:left; }
   @media print {
@@ -519,6 +578,8 @@ const generateUserManual = (steps: Step[]): string => {
   <h3>&#128196; Table of Contents</h3>
   <ol>${toc}</ol>
 </div>
+
+${indexHtml}
 
 ${sectionsHtml}
 </body>
@@ -632,13 +693,6 @@ function groupByScreen(steps: Step[]) {
 
 async function buildWordManual(steps: Step[]): Promise<Blob> {
   const screens = groupByScreen(steps);
-  const docChildren: any[] = [
-    new Paragraph({ text: 'User Manual — Oracle Fusion', heading: HeadingLevel.TITLE }),
-    new Paragraph({
-      children: [new TextRun({ text: `Generated: ${new Date().toLocaleString()}  |  Steps: ${steps.length}`, color: '888888', size: 20 })],
-    }),
-    new Paragraph({ text: '' }),
-  ];
 
   const RED = 'C74634';
   const makeHeader = (cols: string[]) => new TableRow({
@@ -652,6 +706,55 @@ async function buildWordManual(steps: Step[]): Promise<Blob> {
     new TableCell({ children: [new Paragraph({ children: [new TextRun({ text, bold, size: 20 })] })] });
   const centerCell = (text: string) =>
     new TableCell({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text, size: 20 })] })] });
+
+  // Build flat step index (same logic as HTML preview)
+  type WIdx = { num: number; screen: string; type: string; field: string; value: string };
+  const wordIndex: WIdx[] = [];
+  let wIdxNum = 0;
+  for (const sc of screens) {
+    const nonNav = sc.steps.filter(s => s.type !== 'navigate');
+    const wGrps: { fields?: CapturedField[]; steps: Step[] }[] = [];
+    let wCur: { fields?: CapturedField[]; steps: Step[] } = { steps: [] };
+    for (const s of nonNav) {
+      if (s.type === 'snapshot') { wGrps.push(wCur); wCur = { fields: s.fields, steps: [] }; }
+      else { wCur.steps.push(s); }
+    }
+    wGrps.push(wCur);
+    for (const g of wGrps) {
+      if (g.fields?.length) {
+        for (const f of g.fields) wordIndex.push({ num: ++wIdxNum, screen: sc.title, type: f.action || 'Enter', field: f.fieldName, value: f.value });
+      } else {
+        for (const s of g.steps.filter(st => st.type === 'click' || st.type === 'input'))
+          wordIndex.push({ num: ++wIdxNum, screen: sc.title, type: s.type === 'input' ? 'Enter' : 'Click', field: s.fieldName || s.description, value: s.value || '' });
+      }
+    }
+  }
+
+  const docChildren: any[] = [
+    new Paragraph({ text: 'User Manual — Oracle Fusion', heading: HeadingLevel.TITLE }),
+    new Paragraph({
+      children: [new TextRun({ text: `Generated: ${new Date().toLocaleString()}  |  Steps: ${wordIndex.length}`, color: '888888', size: 20 })],
+    }),
+    new Paragraph({ text: '' }),
+  ];
+
+  // Step index table
+  if (wordIndex.length > 0) {
+    docChildren.push(new Paragraph({ text: 'Step Index', heading: HeadingLevel.HEADING_2, spacing: { before: 200, after: 120 } }));
+    const idxHeader = makeHeader(['#', 'Screen', 'Type', 'Field / Element', 'Value']);
+    const idxRows = wordIndex.map(r => new TableRow({
+      children: [
+        centerCell(String(r.num)),
+        cell(r.screen),
+        cell(r.type),
+        cell(r.field, true),
+        cell(r.value || '—'),
+      ],
+    }));
+    docChildren.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [idxHeader, ...idxRows] }));
+    docChildren.push(new Paragraph({ text: '' }));
+    docChildren.push(new Paragraph({ text: '' }));
+  }
 
   let globalIdx = 0;
 
