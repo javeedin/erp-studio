@@ -776,6 +776,10 @@ const OracleFusion: React.FC = () => {
   const [dragIdx, setDragIdx]         = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
 
+  // --- Tab detection (Capture Tab modal) ---
+  const [tabModalOpen, setTabModalOpen] = useState(false);
+  const [detectedTabs, setDetectedTabs] = useState<Array<{ index: number; text: string; selected: boolean; id: string }>>([]);
+
   // --- Saved credentials ---
   const [credsModalOpen, setCredsModalOpen] = useState(false);
   const [hasSavedCreds, setHasSavedCreds] = useState(false);
@@ -831,14 +835,22 @@ const OracleFusion: React.FC = () => {
 
       if (!trackingRef.current) return;
 
+      // Always keep page title current so manual capture buttons know where we are
+      try {
+        const t = await wv.executeJavaScript('document.title');
+        currentPageTitleRef.current = t || (wv.getURL?.() || currentUrl);
+      } catch (_) {}
+
+      // Manual mode: do nothing else automatically
+      if (!autoShotRef.current) return;
+
+      // Auto mode: inject tracking + add navigate step + screenshot
       await injectTracking(wv);
       try {
-        const title = await wv.executeJavaScript('document.title');
+        const title = currentPageTitleRef.current;
         const navUrl = wv.getURL?.() || currentUrl;
         const navId = Date.now() + Math.random() + '';
-        currentPageTitleRef.current = title || navUrl;
 
-        // Add navigate step (screenshot filled in shortly after page settles)
         setSteps(prev => [...prev, {
           id: navId,
           type: 'navigate',
@@ -851,15 +863,12 @@ const OracleFusion: React.FC = () => {
           timestamp: Date.now(),
         }]);
 
-        // Capture screenshot of the new screen once it has fully rendered
-        if (autoShotRef.current) {
-          setTimeout(async () => {
-            const dataUrl = await captureShot();
-            if (dataUrl) {
-              setSteps(prev => prev.map(s => s.id === navId ? { ...s, screenshot: dataUrl } : s));
-            }
-          }, 1000);
-        }
+        setTimeout(async () => {
+          const dataUrl = await captureShot();
+          if (dataUrl) {
+            setSteps(prev => prev.map(s => s.id === navId ? { ...s, screenshot: dataUrl } : s));
+          }
+        }, 1000);
       } catch (_) {}
     };
 
@@ -913,89 +922,86 @@ const OracleFusion: React.FC = () => {
     lastScreenshotRef.current = '';
     // Seed current page title
     try { currentPageTitleRef.current = await wv.executeJavaScript('document.title'); } catch (_) {}
-    await injectTracking(wv);
 
-    // ── Rolling screenshot every 2s (auto mode only) ──
     if (autoShotRef.current) {
+      // ── Auto mode: inject tracking, rolling screenshot + poll ──
+      await injectTracking(wv);
+
       screenshotIntervalRef.current = setInterval(async () => {
         if (!trackingRef.current || !autoShotRef.current) return;
         try {
           const shot = await wv.capturePage();
-          const url = shot?.resize?.({ width: 960 })?.toDataURL?.() || shot?.toDataURL?.() || '';
-          if (url) lastScreenshotRef.current = url;
+          const u = shot?.resize?.({ width: 960 })?.toDataURL?.() || shot?.toDataURL?.() || '';
+          if (u) lastScreenshotRef.current = u;
         } catch (_) {}
       }, 2000);
-    }
 
-    // ── Poll every 800ms: collect steps + detect SPA navigation by title change ──
-    pollRef.current = setInterval(async () => {
-      if (!trackingRef.current) return;
-      try {
-        const pollData = await wv.executeJavaScript(
-          '({steps:(window.__reactErpSteps||[]).splice(0), title:document.title, url:location.href})'
-        );
-        const { steps: rawSteps, title: liveTitle, url: liveUrl } = pollData as any;
+      pollRef.current = setInterval(async () => {
+        if (!trackingRef.current) return;
+        try {
+          const pollData = await wv.executeJavaScript(
+            '({steps:(window.__reactErpSteps||[]).splice(0), title:document.title, url:location.href})'
+          );
+          const { steps: rawSteps, title: liveTitle, url: liveUrl } = pollData as any;
 
-        // ── SPA navigation detected (Oracle Fusion ADF navigates without full reload) ──
-        if (liveTitle && liveTitle !== currentPageTitleRef.current) {
-          const oldTitle = currentPageTitleRef.current;
-          const navId = Date.now() + Math.random() + '';
+          if (liveTitle && liveTitle !== currentPageTitleRef.current) {
+            const oldTitle = currentPageTitleRef.current;
+            const navId = Date.now() + Math.random() + '';
 
-          // 1. Apply last rolling screenshot to all steps from the OLD screen
-          if (autoShotRef.current && lastScreenshotRef.current && oldTitle) {
-            const snap = lastScreenshotRef.current;
-            setSteps(prev => prev.map(s =>
-              !s.screenshot && s.pageTitle === oldTitle ? { ...s, screenshot: snap } : s
-            ));
+            if (lastScreenshotRef.current && oldTitle) {
+              const snap = lastScreenshotRef.current;
+              setSteps(prev => prev.map(s =>
+                !s.screenshot && s.pageTitle === oldTitle ? { ...s, screenshot: snap } : s
+              ));
+            }
+
+            currentPageTitleRef.current = liveTitle;
+            lastScreenshotRef.current = '';
+
+            setSteps(prev => [...prev, {
+              id: navId,
+              type: 'navigate' as const,
+              fieldName: liveTitle,
+              action: 'Navigate',
+              value: '',
+              description: `Navigate to: ${liveTitle}`,
+              url: liveUrl,
+              pageTitle: liveTitle,
+              timestamp: Date.now(),
+            }]);
+
+            await injectTracking(wv);
+
+            setTimeout(async () => {
+              try {
+                const shot = await wv.capturePage();
+                const dataUrl = shot?.resize?.({ width: 960 })?.toDataURL?.() || shot?.toDataURL?.() || '';
+                if (dataUrl) {
+                  lastScreenshotRef.current = dataUrl;
+                  setSteps(prev => prev.map(s => s.id === navId ? { ...s, screenshot: dataUrl } : s));
+                }
+              } catch (_) {}
+            }, 1000);
           }
 
-          currentPageTitleRef.current = liveTitle;
-          lastScreenshotRef.current = '';
+          if (rawSteps?.length) {
+            const enriched: Step[] = rawSteps.map((s: any) => ({
+              fieldName: s.fieldName || s.description || '',
+              action: s.action || s.type || '',
+              value: s.value || '',
+              ...s,
+              id: Date.now() + Math.random() + '',
+            }));
+            setSteps(prev => [...prev, ...enriched]);
+          }
+        } catch (_) {}
+      }, 800);
 
-          // 2. Add navigate step
-          setSteps(prev => [...prev, {
-            id: navId,
-            type: 'navigate' as const,
-            fieldName: liveTitle,
-            action: 'Navigate',
-            value: '',
-            description: `Navigate to: ${liveTitle}`,
-            url: liveUrl,
-            pageTitle: liveTitle,
-            timestamp: Date.now(),
-          }]);
-
-          // 3. Re-inject tracker into new SPA page
-          await injectTracking(wv);
-
-          // 4. Capture screenshot of new screen once settled (1s) — auto mode only
-          if (autoShotRef.current) setTimeout(async () => {
-            try {
-              const shot = await wv.capturePage();
-              const dataUrl = shot?.resize?.({ width: 960 })?.toDataURL?.() || shot?.toDataURL?.() || '';
-              if (dataUrl) {
-                lastScreenshotRef.current = dataUrl;
-                setSteps(prev => prev.map(s => s.id === navId ? { ...s, screenshot: dataUrl } : s));
-              }
-            } catch (_) {}
-          }, 1000);
-        }
-
-        // ── Collect field/click steps ──
-        if (rawSteps?.length) {
-          const enriched: Step[] = rawSteps.map((s: any) => ({
-            fieldName: s.fieldName || s.description || '',
-            action: s.action || s.type || '',
-            value: s.value || '',
-            ...s,
-            id: Date.now() + Math.random() + '',
-          }));
-          setSteps(prev => [...prev, ...enriched]);
-        }
-      } catch (_) {}
-    }, 800);
-
-    message.success('Step tracking started — perform your Oracle Fusion workflow');
+      message.success('Step tracking started — perform your Oracle Fusion workflow');
+    } else {
+      // ── Manual mode: zero automation — floating buttons drive everything ──
+      message.success('Manual capture mode — use the floating buttons to capture screens and fields');
+    }
   };
 
   const stopTracking = async () => {
@@ -1336,6 +1342,97 @@ const OracleFusion: React.FC = () => {
     }
   };
 
+  // ---- Detect tabs and ask user which one to capture ----
+  const handleDetectAndCaptureTab = async () => {
+    const wv = webviewRef.current;
+    if (!wv) return;
+    try {
+      await injectTracking(wv);
+      const raw = await wv.executeJavaScript(`
+        (function() {
+          var results = [];
+          var seen = {};
+          var tabEls = Array.from(document.querySelectorAll('[role="tab"]'));
+          tabEls.forEach(function(el, i) {
+            var text = (el.getAttribute('aria-label') || el.innerText || el.textContent || '')
+              .trim().replace(/\\s+/g, ' ').slice(0, 80);
+            if (!text || text.length < 2 || seen[text]) return;
+            seen[text] = true;
+            var selected = el.getAttribute('aria-selected') === 'true';
+            results.push({ index: i, text: text, selected: selected, id: el.id || '' });
+          });
+          return JSON.stringify(results);
+        })()
+      `);
+      const tabs: Array<{ index: number; text: string; selected: boolean; id: string }> = JSON.parse(raw || '[]');
+      if (!tabs.length) {
+        message.info('No tabs detected on this page — capturing full page');
+        await handleCaptureTab();
+        return;
+      }
+      setDetectedTabs(tabs);
+      setTabModalOpen(true);
+    } catch (e: any) {
+      message.error('Tab detection failed: ' + e.message);
+    }
+  };
+
+  const handleCaptureSelectedTab = async (tab: { index: number; text: string; selected: boolean; id: string }) => {
+    setTabModalOpen(false);
+    const wv = webviewRef.current;
+    if (!wv) return;
+    try {
+      // Click the tab to activate it
+      const clickResult = await wv.executeJavaScript(`
+        (function() {
+          var tabEls = Array.from(document.querySelectorAll('[role="tab"]'));
+          var el = ${tab.id ? `document.getElementById(${JSON.stringify(tab.id)}) || ` : ''}tabEls[${tab.index}];
+          if (el) { el.click(); return 'clicked'; }
+          return 'not-found';
+        })()
+      `);
+      if (clickResult === 'not-found') message.warning('Could not locate tab — capturing current view');
+
+      // Wait for the tab panel to render
+      await new Promise(r => setTimeout(r, 800));
+
+      await injectTracking(wv);
+      const raw = await wv.executeJavaScript('window.__reactErpCaptureFields ? window.__reactErpCaptureFields() : "[]"');
+      const captured: any[] = JSON.parse(raw || '[]');
+
+      const shot = await wv.capturePage();
+      const dataUrl = shot?.resize?.({ width: 960 })?.toDataURL?.() || shot?.toDataURL?.() || '';
+      const currentTitle = await wv.executeJavaScript('document.title').catch(() => currentPageTitleRef.current);
+
+      const now = Date.now();
+      const snapshotStep: Step = {
+        id: now + 'tab' + Math.random(),
+        type: 'snapshot',
+        fieldName: `${tab.text}`,
+        action: 'Snapshot',
+        value: captured.length ? `${captured.length} fields` : '',
+        description: `Tab: ${tab.text}`,
+        url: wv.getURL?.() || '',
+        pageTitle: currentTitle,
+        timestamp: now,
+        screenshot: dataUrl || undefined,
+        fields: captured.length
+          ? captured.map((s: any) => ({
+              fieldName: s.fieldName || '',
+              action: s.action || '',
+              value: s.value || '',
+              description: s.description || '',
+            }))
+          : undefined,
+      };
+
+      setSteps(prev => [...prev, snapshotStep]);
+      message.success(`Tab "${tab.text}" captured${captured.length ? ` — ${captured.length} fields` : ''}`);
+    } catch (e: any) {
+      message.error('Tab capture failed: ' + e.message);
+    }
+  };
+
   // ---- Preview (Blob URL avoids srcDoc size limit with many screenshots) ----
   const handleOpenPreview = () => {
     if (!steps.length) return;
@@ -1464,18 +1561,23 @@ const OracleFusion: React.FC = () => {
         {/* Track Steps */}
         {tracking ? (
           <>
-            <Tooltip title="Scan fields and replace noisy clicks with clean data (replaces existing captures for this screen)">
-              <Button size="small" icon={<FileTextOutlined />} onClick={handleCaptureFields}
-                style={{ background: '#1b5e20', border: 'none', color: '#fff', fontWeight: 600 }}>
-                Capture Fields
-              </Button>
-            </Tooltip>
-            <Tooltip title="Capture screenshot + fields and APPEND — use this when switching between tab pages on the same screen">
-              <Button size="small" icon={<CameraOutlined />} onClick={handleCaptureTab}
-                style={{ background: '#4a148c', border: 'none', color: '#fff', fontWeight: 600 }}>
-                Capture Tab
-              </Button>
-            </Tooltip>
+            {/* Auto mode: capture buttons in toolbar; Manual mode: buttons move to floating overlay */}
+            {autoShot && (
+              <>
+                <Tooltip title="Scan all fields on this page and save as one consolidated step">
+                  <Button size="small" icon={<FileTextOutlined />} onClick={handleCaptureFields}
+                    style={{ background: '#1b5e20', border: 'none', color: '#fff', fontWeight: 600 }}>
+                    Capture Fields
+                  </Button>
+                </Tooltip>
+                <Tooltip title="Detect tabs, ask which tab, then capture screenshot + fields for that tab">
+                  <Button size="small" icon={<CameraOutlined />} onClick={handleDetectAndCaptureTab}
+                    style={{ background: '#4a148c', border: 'none', color: '#fff', fontWeight: 600 }}>
+                    Capture Tab
+                  </Button>
+                </Tooltip>
+              </>
+            )}
             <Badge count={steps.length} size="small" offset={[-4, 0]}>
               <Button size="small" onClick={stopTracking}
                 style={{ background: '#7b2d00', border: 'none', color: '#fff', display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -1493,28 +1595,20 @@ const OracleFusion: React.FC = () => {
           </Tooltip>
         )}
 
-        {/* Auto screenshot toggle */}
-        <Tooltip title={autoShot ? 'Auto screenshot ON — screenshots captured automatically' : 'Auto screenshot OFF — click 📷 to capture manually'} placement="bottom">
+        {/* Auto / Manual toggle */}
+        <Tooltip title={autoShot ? 'Auto mode — everything captured automatically' : 'Manual mode — use floating buttons to capture'} placement="bottom">
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span style={{ fontSize: 10, color: '#aaa' }}>Auto 📷</span>
+            <span style={{ fontSize: 10, color: autoShot ? '#7cb9e8' : '#ffd54f' }}>
+              {autoShot ? 'Auto 📷' : 'Manual 📷'}
+            </span>
             <Switch
               size="small"
               checked={autoShot}
               onChange={v => { setAutoShot(v); autoShotRef.current = v; }}
-              style={{ background: autoShot ? '#1565c0' : '#555' }}
+              style={{ background: autoShot ? '#1565c0' : '#c77700' }}
             />
           </div>
         </Tooltip>
-
-        {/* Manual capture button — visible when autoShot is off and tracking */}
-        {tracking && !autoShot && (
-          <Tooltip title="Capture screenshot now for current steps" placement="bottom">
-            <Button size="small" icon={<CameraOutlined />} onClick={handleManualCapture}
-              style={{ background: '#c77700', border: 'none', color: '#fff', fontWeight: 600 }}>
-              📷 Capture
-            </Button>
-          </Tooltip>
-        )}
 
         {/* Screen Record */}
         {recording ? (
@@ -1561,23 +1655,68 @@ const OracleFusion: React.FC = () => {
       {/* Main Area: WebView + Steps Panel */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
-        {/* WebView */}
-        {isElectron() ? (
-          <webview
-            ref={webviewRef}
-            src={url}
-            // @ts-ignore
-            disablewebsecurity="true"
-            // @ts-ignore
-            allowpopups="true"
-            style={{ flex: 1, minWidth: 0 }}
-          />
-        ) : (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, color: '#fff' }}>
-            <Text style={{ color: '#fff', fontSize: 16 }}>Oracle Fusion WebView is only available in the desktop app.</Text>
-            <Text style={{ color: '#aaa' }}>Please use the installed ReactERP desktop application.</Text>
-          </div>
-        )}
+        {/* WebView wrapper — relative so floating toolbar can position inside */}
+        <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
+          {isElectron() ? (
+            <webview
+              ref={webviewRef}
+              src={url}
+              // @ts-ignore
+              disablewebsecurity="true"
+              // @ts-ignore
+              allowpopups="true"
+              style={{ width: '100%', height: '100%' }}
+            />
+          ) : (
+            <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, color: '#fff' }}>
+              <Text style={{ color: '#fff', fontSize: 16 }}>Oracle Fusion WebView is only available in the desktop app.</Text>
+              <Text style={{ color: '#aaa' }}>Please use the installed ReactERP desktop application.</Text>
+            </div>
+          )}
+
+          {/* ── Floating capture toolbar — Manual mode only ── */}
+          {tracking && !autoShot && (
+            <div style={{
+              position: 'absolute', bottom: 28, right: 28,
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
+              zIndex: 200,
+            }}>
+              <Tooltip title="Capture screenshot" placement="left">
+                <button
+                  onClick={handleManualCapture}
+                  style={{
+                    width: 52, height: 52, borderRadius: '50%', border: 'none', cursor: 'pointer',
+                    background: '#c77700', color: '#fff', fontSize: 22, lineHeight: 1,
+                    boxShadow: '0 3px 10px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                  title="Capture screenshot"
+                >📷</button>
+              </Tooltip>
+              <Tooltip title="Capture all fields on this page" placement="left">
+                <button
+                  onClick={handleCaptureFields}
+                  style={{
+                    width: 52, height: 52, borderRadius: '50%', border: 'none', cursor: 'pointer',
+                    background: '#1b5e20', color: '#fff', fontSize: 22, lineHeight: 1,
+                    boxShadow: '0 3px 10px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                  title="Capture fields"
+                >📋</button>
+              </Tooltip>
+              <Tooltip title="Detect tabs — pick which tab to capture" placement="left">
+                <button
+                  onClick={handleDetectAndCaptureTab}
+                  style={{
+                    width: 52, height: 52, borderRadius: '50%', border: 'none', cursor: 'pointer',
+                    background: '#4a148c', color: '#fff', fontSize: 22, lineHeight: 1,
+                    boxShadow: '0 3px 10px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                  title="Capture tab"
+                >📑</button>
+              </Tooltip>
+            </div>
+          )}
+        </div>
 
         {/* Steps Panel */}
         {showPanel && (
@@ -1779,6 +1918,41 @@ const OracleFusion: React.FC = () => {
         style={{ width: '100%', height: 'calc(90vh - 130px)', border: 'none', borderRadius: 4 }}
         title="User Manual Preview"
       />
+    </Modal>
+
+    {/* ── Tab Selection Modal ── */}
+    <Modal
+      title="Select Tab to Capture"
+      open={tabModalOpen}
+      onCancel={() => setTabModalOpen(false)}
+      footer={null}
+      width={380}
+    >
+      <p style={{ color: '#666', fontSize: 13, marginBottom: 14 }}>
+        Detected tabs on this page — select which one to capture:
+      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {detectedTabs.map(tab => (
+          <button
+            key={tab.id || tab.index}
+            onClick={() => handleCaptureSelectedTab(tab)}
+            style={{
+              textAlign: 'left', padding: '10px 16px', borderRadius: 6, cursor: 'pointer',
+              background: tab.selected ? '#e8f5e9' : '#fafafa',
+              border: `1px solid ${tab.selected ? '#4caf50' : '#d9d9d9'}`,
+              color: '#333', fontSize: 13, fontWeight: tab.selected ? 600 : 400,
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}
+          >
+            {tab.selected
+              ? <span style={{ color: '#4caf50', fontSize: 10 }}>●</span>
+              : <span style={{ color: '#ccc', fontSize: 10 }}>○</span>
+            }
+            {tab.text}
+            {tab.selected && <span style={{ color: '#999', fontSize: 11, marginLeft: 4 }}>(active)</span>}
+          </button>
+        ))}
+      </div>
     </Modal>
 
     {/* ── Credentials Setup Modal ── */}
