@@ -2041,12 +2041,13 @@ const OracleFusion: React.FC = () => {
           {/* ── Floating capture toolbar — Manual mode only ── */}
           {tracking && !autoShot && (
             <div style={{
-              position: 'absolute', bottom: 18, right: 18,
+              position: 'fixed', bottom: 22, right: showPanel ? 358 : 18,
               display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6,
-              background: 'rgba(20,20,30,0.72)', backdropFilter: 'blur(6px)',
+              background: 'rgba(20,20,30,0.82)', backdropFilter: 'blur(8px)',
               borderRadius: 28, padding: '5px 10px',
-              boxShadow: '0 4px 16px rgba(0,0,0,0.45)',
-              zIndex: 200,
+              boxShadow: '0 4px 20px rgba(0,0,0,0.55)',
+              zIndex: 9999,
+              transition: 'right 0.2s ease',
             }}>
               {([
                 { icon: '📷', bg: '#c77700', title: 'Capture screenshot',          onClick: handleManualCapture },
