@@ -1847,54 +1847,34 @@ const OracleFusion: React.FC = () => {
           {/* ── Floating capture toolbar — Manual mode only ── */}
           {tracking && !autoShot && (
             <div style={{
-              position: 'absolute', bottom: 28, right: 28,
-              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
+              position: 'absolute', bottom: 18, right: 18,
+              display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6,
+              background: 'rgba(20,20,30,0.72)', backdropFilter: 'blur(6px)',
+              borderRadius: 28, padding: '5px 10px',
+              boxShadow: '0 4px 16px rgba(0,0,0,0.45)',
               zIndex: 200,
             }}>
-              <Tooltip title="Capture screenshot" placement="left">
-                <button
-                  onClick={handleManualCapture}
-                  style={{
-                    width: 52, height: 52, borderRadius: '50%', border: 'none', cursor: 'pointer',
-                    background: '#c77700', color: '#fff', fontSize: 22, lineHeight: 1,
-                    boxShadow: '0 3px 10px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}
-                  title="Capture screenshot"
-                >📷</button>
-              </Tooltip>
-              <Tooltip title="Capture all fields on this page" placement="left">
-                <button
-                  onClick={handleCaptureFields}
-                  style={{
-                    width: 52, height: 52, borderRadius: '50%', border: 'none', cursor: 'pointer',
-                    background: '#1b5e20', color: '#fff', fontSize: 22, lineHeight: 1,
-                    boxShadow: '0 3px 10px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}
-                  title="Capture fields"
-                >📋</button>
-              </Tooltip>
-              <Tooltip title="Detect tabs — pick which tab to capture" placement="left">
-                <button
-                  onClick={handleDetectAndCaptureTab}
-                  style={{
-                    width: 52, height: 52, borderRadius: '50%', border: 'none', cursor: 'pointer',
-                    background: '#4a148c', color: '#fff', fontSize: 22, lineHeight: 1,
-                    boxShadow: '0 3px 10px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}
-                  title="Capture tab"
-                >📑</button>
-              </Tooltip>
-              <Tooltip title="Select an area — capture only fields inside your selection" placement="left">
-                <button
-                  onClick={handleAreaCapture}
-                  style={{
-                    width: 52, height: 52, borderRadius: '50%', border: 'none', cursor: 'pointer',
-                    background: '#00695c', color: '#fff', fontSize: 22, lineHeight: 1,
-                    boxShadow: '0 3px 10px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}
-                  title="Select area"
-                >📐</button>
-              </Tooltip>
+              {([
+                { icon: '📷', bg: '#c77700', title: 'Capture screenshot',          onClick: handleManualCapture },
+                { icon: '📋', bg: '#1b5e20', title: 'Capture all fields',           onClick: handleCaptureFields },
+                { icon: '📑', bg: '#4a148c', title: 'Pick a tab to capture',        onClick: handleDetectAndCaptureTab },
+                { icon: '📐', bg: '#00695c', title: 'Select area to capture',       onClick: handleAreaCapture },
+              ] as const).map(({ icon, bg, title, onClick }) => (
+                <Tooltip key={icon} title={title} placement="top">
+                  <button
+                    onClick={onClick}
+                    style={{
+                      width: 36, height: 36, borderRadius: '50%', border: 'none', cursor: 'pointer',
+                      background: bg, color: '#fff', fontSize: 16, lineHeight: 1,
+                      boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      transition: 'transform 0.1s',
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.transform = 'scale(1.15)')}
+                    onMouseLeave={e => (e.currentTarget.style.transform = 'scale(1)')}
+                  >{icon}</button>
+                </Tooltip>
+              ))}
             </div>
           )}
         </div>
