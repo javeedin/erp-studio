@@ -1379,79 +1379,121 @@ const OracleFusion: React.FC = () => {
     const wv = webviewRef.current;
     if (!wv) return;
     try {
-      // Get page viewport size to scale region from screenshot px → CSS px
-      const pageW: number = await wv.executeJavaScript('window.innerWidth');
-      const pageH: number = await wv.executeJavaScript('window.innerHeight');
-
-      const scX = pageW / region.naturalW;
-      const scY = pageH / region.naturalH;
-      const pgRegion = {
-        left:   region.x * scX,
-        top:    region.y * scY,
-        right:  (region.x + region.w) * scX,
-        bottom: (region.y + region.h) * scY,
-      };
-
-      // Self-contained script: extract fields whose bounding rect intersects the region
+      // All coordinate conversion + field extraction in ONE JS call to avoid drift.
+      // capturePage() captures at devicePixelRatio scale, so naturalW = innerWidth * DPR.
+      // We convert region (screenshot px) → CSS px inside the page context itself.
       const raw: string = await wv.executeJavaScript(`
         (function() {
-          var rgn = ${JSON.stringify(pgRegion)};
-          var results = [], seen = {};
+          var natW = ${region.naturalW}, natH = ${region.naturalH};
+          var rx = ${region.x}, ry = ${region.y}, rw = ${region.w}, rh = ${region.h};
+          var scX = window.innerWidth  / natW;
+          var scY = window.innerHeight / natH;
+          var rgn = { left: rx*scX, top: ry*scY, right: (rx+rw)*scX, bottom: (ry+rh)*scY };
+
+          // Center-point check — more reliable than intersection for ADF zero-size widgets
           function inRgn(el) {
-            try { var r=el.getBoundingClientRect(); return r.right>rgn.left&&r.left<rgn.right&&r.bottom>rgn.top&&r.top<rgn.bottom; } catch(e){return false;}
+            try {
+              var r = el.getBoundingClientRect();
+              if (r.width === 0 && r.height === 0) return false;
+              var cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+              return cx >= rgn.left && cx <= rgn.right && cy >= rgn.top && cy <= rgn.bottom;
+            } catch(e) { return false; }
           }
+
           function getLabel(el) {
-            if(!el||!el.getAttribute) return '';
-            var al=el.getAttribute('aria-label'); if(al) return al.trim();
-            var alby=el.getAttribute('aria-labelledby');
-            if(alby){var tx=alby.split(' ').map(function(id){var e=document.getElementById(id);return e?e.textContent.trim():'';}).filter(Boolean).join(' ');if(tx) return tx;}
-            if(el.id){var lb=document.querySelector('label[for="'+el.id+'"]');if(lb) return lb.textContent.trim().replace(/:$/,'').trim();}
+            if (!el || !el.getAttribute) return '';
+            var al = el.getAttribute('aria-label'); if (al) return al.trim();
+            var alby = el.getAttribute('aria-labelledby');
+            if (alby) {
+              var tx = alby.split(' ').map(function(id){ var e=document.getElementById(id); return e?e.textContent.trim():''; }).filter(Boolean).join(' ');
+              if (tx) return tx;
+            }
+            if (el.id) { var lb = document.querySelector('label[for="'+el.id+'"]'); if (lb) return lb.textContent.trim().replace(/:$/,'').trim(); }
             return (el.getAttribute('title')||el.getAttribute('placeholder')||el.name||'').trim();
           }
           function findLabel(el) {
-            var d=getLabel(el); if(d) return d;
-            var node=el.parentElement;
-            for(var i=0;i<8&&node;i++){
-              var prev=node.previousElementSibling;
-              if(prev){var lbl=prev.querySelector('label')||prev.querySelector('[role="label"]');if(lbl){var t=lbl.textContent.trim().replace(/:$/,'').trim();if(t&&t.length<80) return t;}var pt=prev.textContent.trim().replace(/:$/,'').trim();if(pt&&pt.length<60&&!pt.includes('\\n')&&!/^[0-9,.$%]+$/.test(pt)) return pt;}
-              var labels=node.querySelectorAll('label');for(var j=0;j<labels.length;j++){var lt=labels[j].textContent.trim().replace(/:$/,'').trim();if(lt&&lt.length<80) return lt;}
-              node=node.parentElement;
+            var d = getLabel(el); if (d) return d;
+            var node = el.parentElement;
+            for (var i = 0; i < 8 && node; i++) {
+              var prev = node.previousElementSibling;
+              if (prev) {
+                var lbl = prev.querySelector('label') || prev.querySelector('[role="label"]');
+                if (lbl) { var t=lbl.textContent.trim().replace(/:$/,'').trim(); if(t&&t.length<80) return t; }
+                var pt = prev.textContent.trim().replace(/:$/,'').trim();
+                if (pt && pt.length < 60 && !pt.includes('\\n') && !/^[0-9,.$%]+$/.test(pt)) return pt;
+              }
+              var labels = node.querySelectorAll('label');
+              for (var j = 0; j < labels.length; j++) { var lt=labels[j].textContent.trim().replace(/:$/,'').trim(); if(lt&&lt.length<80) return lt; }
+              node = node.parentElement;
             }
             return '';
           }
-          var els=Array.from(document.querySelectorAll('input,select,textarea,[role="textbox"],[role="combobox"],[role="spinbutton"]'));
-          els.forEach(function(el){
-            if(!inRgn(el)) return;
-            var tag=el.tagName.toLowerCase(),type=(el.getAttribute('type')||'text').toLowerCase();
-            if(type==='hidden'||type==='submit'||type==='button'||type==='image'||type==='reset'||type==='file') return;
-            var value='';
-            if(tag==='select') value=el.options&&el.selectedIndex>=0?(el.options[el.selectedIndex].text||el.value):el.value;
-            else if(type==='checkbox'||type==='radio'){if(!el.checked) return; value=findLabel(el)||(el.checked?'Yes':'No');}
-            else value=(el.value||el.textContent||'').trim();
-            if(!value||value.length<1) return;
-            var label=findLabel(el); if(!label||label.length<2) return;
-            if(seen[label]) return; seen[label]=true;
-            var action=tag==='select'?'Select':(type==='checkbox'||type==='radio')?'Check':'Enter';
-            results.push({type:'input',fieldName:label,action:action,value:value,description:action+' "'+value+'" in: '+label,url:location.href,pageTitle:document.title,timestamp:Date.now()});
+
+          var results = [], seen = {};
+
+          // Cast a grid of rays into the region to catch ADF custom widgets
+          var extraEls = new Set();
+          var step = 18;
+          for (var px = rgn.left + step/2; px < rgn.right; px += step) {
+            for (var py = rgn.top + step/2; py < rgn.bottom; py += step) {
+              var hit = document.elementFromPoint(px, py);
+              while (hit && hit !== document.body) { extraEls.add(hit); hit = hit.parentElement; }
+            }
+          }
+
+          // Merge selector-found elements with ray-cast elements
+          var selectorEls = Array.from(document.querySelectorAll(
+            'input,select,textarea,[role="textbox"],[role="combobox"],[role="spinbutton"],[role="listbox"]'
+          ));
+          var allInputEls = new Set(selectorEls);
+          extraEls.forEach(function(el) {
+            var tag = (el.tagName||'').toLowerCase();
+            var role = (el.getAttribute && el.getAttribute('role')) || '';
+            if (tag==='input'||tag==='select'||tag==='textarea'||role==='textbox'||role==='combobox'||role==='spinbutton'||role==='listbox') {
+              allInputEls.add(el);
+            }
           });
-          var lblEls=Array.from(document.querySelectorAll('label,[class*="af_panelLabelAndMessage_label"],[class*="AFPanelFormLayoutLabel"]'));
-          lblEls.forEach(function(lbl){
-            if(!inRgn(lbl)) return;
-            var labelText=lbl.textContent.trim().replace(/:$/,'').trim();
-            if(!labelText||labelText.length<2||labelText.length>80) return;
-            if(seen[labelText]) return;
-            var parentCell=lbl.closest('td,th');
-            var valueEl=parentCell?parentCell.nextElementSibling:null;
-            if(!valueEl) valueEl=lbl.nextElementSibling;
-            if(!valueEl){var p=lbl.parentElement;if(p) valueEl=p.nextElementSibling;}
-            if(!valueEl) return;
-            var val=(valueEl.textContent||'').trim().replace(/\\s+/g,' ').trim();
-            if(!val||val.length<1||val.length>300) return;
-            if(valueEl.querySelector('input,select,textarea')) return;
-            if(/^[0-9]+$/.test(val)&&val.length<2) return;
-            seen[labelText]=true;
-            results.push({type:'input',fieldName:labelText,action:'Display',value:val,description:'Display "'+val+'" — '+labelText,url:location.href,pageTitle:document.title,timestamp:Date.now()});
+
+          allInputEls.forEach(function(el) {
+            if (!inRgn(el)) return;
+            var tag = el.tagName.toLowerCase(), type = (el.getAttribute('type')||'text').toLowerCase();
+            if (type==='hidden'||type==='submit'||type==='button'||type==='image'||type==='reset'||type==='file') return;
+            var value = '';
+            if (tag==='select') value = el.options&&el.selectedIndex>=0?(el.options[el.selectedIndex].text||el.value):el.value;
+            else if (type==='checkbox'||type==='radio') { if(!el.checked) return; value = findLabel(el)||(el.checked?'Yes':'No'); }
+            else value = (el.value||el.textContent||'').trim();
+            if (!value || value.length < 1) return;
+            var label = findLabel(el); if (!label || label.length < 2) return;
+            if (seen[label]) return; seen[label] = true;
+            var action = tag==='select'?'Select':(type==='checkbox'||type==='radio')?'Check':'Enter';
+            results.push({fieldName:label,action:action,value:value,description:action+' "'+value+'" in: '+label});
           });
+
+          // ADF label+value pairs (read-only display fields shown as text)
+          var lblSelectors = 'label,[class*="af_panelLabelAndMessage_label"],[class*="AFPanelFormLayout"],[class*="xfd"],[class*="xf8"]';
+          var lblEls = new Set(Array.from(document.querySelectorAll(lblSelectors)));
+          extraEls.forEach(function(el) {
+            var cn = (el.className||'');
+            if (typeof cn === 'string' && (cn.indexOf('Label')>-1||cn.indexOf('label')>-1||cn.indexOf('xfd')>-1||cn.indexOf('xf8')>-1)) lblEls.add(el);
+          });
+          lblEls.forEach(function(lbl) {
+            if (!inRgn(lbl)) return;
+            var labelText = lbl.textContent.trim().replace(/:$/,'').trim();
+            if (!labelText||labelText.length<2||labelText.length>80) return;
+            if (seen[labelText]) return;
+            var parentCell = lbl.closest('td,th');
+            var valueEl = parentCell ? parentCell.nextElementSibling : null;
+            if (!valueEl) valueEl = lbl.nextElementSibling;
+            if (!valueEl) { var p=lbl.parentElement; if(p) valueEl=p.nextElementSibling; }
+            if (!valueEl) return;
+            var val = (valueEl.textContent||'').trim().replace(/\\s+/g,' ').trim();
+            if (!val||val.length<1||val.length>300) return;
+            if (valueEl.querySelector('input,select,textarea')) return;
+            if (/^[0-9]+$/.test(val)&&val.length<2) return;
+            seen[labelText] = true;
+            results.push({fieldName:labelText,action:'Display',value:val,description:'Display "'+val+'" — '+labelText});
+          });
+
           return JSON.stringify(results);
         })()
       `);
