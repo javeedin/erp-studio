@@ -1,5 +1,5 @@
 import React, { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Spin } from 'antd';
 import { AuthProvider } from './context/AuthContext';
 import { ShowAndTellProvider, ShowAndTellOverlay } from './features/showAndTell';
@@ -31,13 +31,13 @@ const ProtectedApp: React.FC = () => (
 );
 
 const App: React.FC = () => (
-  <BrowserRouter>
+  <HashRouter>
     <AuthProvider>
       <Routes>
         <Route path="/*" element={<ProtectedApp />} />
       </Routes>
     </AuthProvider>
-  </BrowserRouter>
+  </HashRouter>
 );
 
 export default App;
