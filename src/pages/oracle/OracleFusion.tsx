@@ -1519,7 +1519,31 @@ const OracleFusion: React.FC = () => {
             results.push({fieldName:label,action:action,value:value,description:action+' "'+value+'" in: '+label});
           });
 
-          // ADF label+value pairs (read-only display fields shown as text)
+          // Table column headers: <th> in header row → <td> at same column index in next data row
+          Array.from(document.querySelectorAll('th')).forEach(function(th) {
+            if (!inRgn(th)) return;
+            var labelText = th.textContent.trim().replace(/:$/, '').trim();
+            if (!labelText || labelText.length < 2 || labelText.length > 80) return;
+            if (seen[labelText]) return;
+            var row = th.parentElement; if (!row) return;
+            var headerCells = Array.from(row.children);
+            var colIdx = headerCells.indexOf(th);
+            if (colIdx < 0) return;
+            var dataRow = row.nextElementSibling;
+            // Skip if the next row is still a header row
+            if (!dataRow || dataRow.querySelector('th')) return;
+            var dataCells = Array.from(dataRow.children);
+            var td = dataCells[colIdx];
+            if (!td) return;
+            // If the data cell contains an editable input, it was already captured above
+            if (td.querySelector('input,select,textarea,[role="textbox"],[role="combobox"]')) return;
+            var val = td.textContent.trim().replace(/\s+/g, ' ').trim();
+            if (!val || val.length < 1 || val.length > 300) return;
+            seen[labelText] = true;
+            results.push({fieldName:labelText, action:'Display', value:val, description:'Display "'+val+'" — '+labelText});
+          });
+
+          // ADF form label+value pairs (non-table, non-th label elements)
           var lblSelectors = 'label,[class*="af_panelLabelAndMessage_label"],[class*="AFPanelFormLayout"],[class*="xfd"],[class*="xf8"]';
           var lblEls = new Set(Array.from(document.querySelectorAll(lblSelectors)));
           extraEls.forEach(function(el) {
@@ -1528,10 +1552,11 @@ const OracleFusion: React.FC = () => {
           });
           lblEls.forEach(function(lbl) {
             if (!inRgn(lbl)) return;
+            if (lbl.tagName === 'TH') return; // handled by the table-column logic above
             var labelText = lbl.textContent.trim().replace(/:$/,'').trim();
             if (!labelText||labelText.length<2||labelText.length>80) return;
             if (seen[labelText]) return;
-            var parentCell = lbl.closest('td,th');
+            var parentCell = lbl.closest('td'); // td only, never th
             var valueEl = parentCell ? parentCell.nextElementSibling : null;
             if (!valueEl) valueEl = lbl.nextElementSibling;
             if (!valueEl) { var p=lbl.parentElement; if(p) valueEl=p.nextElementSibling; }
