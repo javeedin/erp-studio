@@ -640,7 +640,21 @@ async function buildWordManual(steps: Step[]): Promise<Blob> {
     new Paragraph({ text: '' }),
   ];
 
+  const RED = 'C74634';
+  const makeHeader = (cols: string[]) => new TableRow({
+    tableHeader: true,
+    children: cols.map(txt => new TableCell({
+      shading: { type: ShadingType.SOLID, fill: RED },
+      children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: txt, bold: true, color: 'FFFFFF', size: 20 })] })],
+    })),
+  });
+  const cell = (text: string, bold = false) =>
+    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text, bold, size: 20 })] })] });
+  const centerCell = (text: string) =>
+    new TableCell({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text, size: 20 })] })] });
+
   let globalIdx = 0;
+
   for (const screen of screens) {
     docChildren.push(new Paragraph({
       text: screen.title,
@@ -648,42 +662,77 @@ async function buildWordManual(steps: Step[]): Promise<Blob> {
       spacing: { before: 320, after: 160 },
     }));
 
-    const shotStep = screen.steps.find(s => s.screenshot);
-    if (shotStep?.screenshot) {
-      const img = await loadImgForWord(shotStep.screenshot);
-      if (img && img.data.length > 0) {
-        docChildren.push(new Paragraph({
-          children: [new ImageRun({ type: 'png', data: img.data, transformation: { width: img.width, height: img.height } })],
-          spacing: { after: 160 },
+    // Split non-navigate steps into sub-groups, separated by snapshot steps
+    // (mirrors the HTML preview's renderGroup logic exactly)
+    type WordGroup = { screenshot: string; label: string; steps: Step[]; fields?: CapturedField[] };
+    const groups: WordGroup[] = [];
+    let current: WordGroup = { screenshot: '', label: '', steps: [] };
+
+    const navStep = screen.steps.find(s => s.type === 'navigate' && s.screenshot);
+    for (const s of screen.steps.filter(st => st.type !== 'navigate')) {
+      if (s.type === 'snapshot') {
+        groups.push(current);
+        current = { screenshot: s.screenshot || '', label: s.fieldName || '', steps: [], fields: s.fields };
+      } else {
+        current.steps.push(s);
+      }
+    }
+    groups.push(current);
+
+    if (groups.length === 1 && !groups[0].screenshot && navStep?.screenshot) {
+      groups[0].screenshot = navStep.screenshot;
+    }
+
+    for (const g of groups) {
+      // Screenshot for this group
+      if (g.screenshot) {
+        const img = await loadImgForWord(g.screenshot);
+        if (img && img.data.length > 0) {
+          docChildren.push(new Paragraph({
+            children: [new ImageRun({ type: 'png', data: img.data, transformation: { width: img.width, height: img.height } })],
+            spacing: { after: 160 },
+          }));
+        }
+      }
+
+      // Snapshot group with captured fields (from "Capture Fields" / area / tab capture)
+      if (g.fields?.length) {
+        const headerRow = makeHeader(['#', 'Type', 'Field / Element', 'Value', 'Description']);
+        const dataRows = g.fields.map((f, fi) => new TableRow({
+          children: [
+            centerCell(String(fi + 1)),
+            cell(f.action || 'Enter'),
+            cell(f.fieldName || '', true),
+            cell(f.value || ''),
+            cell(f.description || ''),
+          ],
         }));
+        docChildren.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow, ...dataRows] }));
+        docChildren.push(new Paragraph({ text: '' }));
+        continue;
+      }
+
+      // Regular interaction steps (click / input)
+      const actionSteps = g.steps.filter(s => s.type === 'click' || s.type === 'input');
+      if (actionSteps.length > 0) {
+        const headerRow = makeHeader(['#', 'Type', 'Field / Element', 'Value', 'Description']);
+        const dataRows = actionSteps.map(s => {
+          globalIdx++;
+          return new TableRow({
+            children: [
+              centerCell(String(globalIdx)),
+              cell(s.type),
+              cell(s.fieldName || '', true),
+              cell(s.value || ''),
+              cell(s.description || ''),
+            ],
+          });
+        });
+        docChildren.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow, ...dataRows] }));
+        docChildren.push(new Paragraph({ text: '' }));
       }
     }
 
-    const actionSteps = screen.steps.filter(s => s.type !== 'navigate' && s.type !== 'snapshot');
-    if (actionSteps.length > 0) {
-      const headerRow = new TableRow({
-        tableHeader: true,
-        children: ['#', 'Type', 'Field / Element', 'Value', 'Description'].map(txt =>
-          new TableCell({
-            shading: { type: ShadingType.SOLID, fill: 'C74634' },
-            children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: txt, bold: true, color: 'FFFFFF', size: 20 })] })],
-          })
-        ),
-      });
-      const dataRows = actionSteps.map(s => {
-        globalIdx++;
-        return new TableRow({
-          children: [
-            new TableCell({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: String(globalIdx), size: 20 })] })] }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: s.type, size: 20 })] })] }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: s.fieldName || '', size: 20 })] })] }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: s.value || '', size: 20 })] })] }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: s.description || '', size: 20 })] })] }),
-          ],
-        });
-      });
-      docChildren.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow, ...dataRows] }));
-    }
     docChildren.push(new Paragraph({ text: '' }));
   }
 
