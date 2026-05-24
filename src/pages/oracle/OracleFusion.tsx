@@ -13,7 +13,8 @@ import {
 } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
 import ScreenshotAnnotator from '../../components/ScreenshotAnnotator';
-import AreaSelector, { SelectedRegion } from '../../components/AreaSelector';
+import AreaSelector from '../../components/AreaSelector';
+import type { SelectedRegion } from '../../components/AreaSelector';
 import {
   Document, Packer, Paragraph, Table, TableRow, TableCell,
   ImageRun, HeadingLevel, TextRun, WidthType, ShadingType,
