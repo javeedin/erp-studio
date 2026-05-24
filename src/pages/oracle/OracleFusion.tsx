@@ -1448,7 +1448,7 @@ const OracleFusion: React.FC = () => {
     if (previewUrl) { URL.revokeObjectURL(previewUrl); setPreviewUrl(''); }
   };
 
-  // ---- Manual screenshot capture (used when autoShot=false) ----
+  // ---- Manual screenshot capture ----
   const handleManualCapture = async () => {
     const wv = webviewRef.current;
     if (!wv) { message.warning('WebView not ready'); return; }
@@ -1456,11 +1456,33 @@ const OracleFusion: React.FC = () => {
       const shot = await wv.capturePage();
       const dataUrl = shot?.resize?.({ width: 960 })?.toDataURL?.() || shot?.toDataURL?.() || '';
       if (!dataUrl) { message.warning('Could not capture screenshot'); return; }
-      const title = currentPageTitleRef.current;
-      setSteps(prev => prev.map(s =>
-        s.pageTitle === title && !s.screenshot ? { ...s, screenshot: dataUrl } : s
-      ));
+
+      const title = currentPageTitleRef.current ||
+        await wv.executeJavaScript('document.title').catch(() => '');
+
       lastScreenshotRef.current = dataUrl;
+
+      if (!autoShotRef.current) {
+        // Manual mode: no existing steps — create a new snapshot step
+        const newStep: Step = {
+          id: Date.now() + Math.random() + '',
+          type: 'snapshot',
+          fieldName: title || 'Screenshot',
+          action: 'Snapshot',
+          value: '',
+          description: `Screenshot: ${title || 'Oracle Fusion'}`,
+          url: wv.getURL?.() || '',
+          pageTitle: title,
+          timestamp: Date.now(),
+          screenshot: dataUrl,
+        };
+        setSteps(prev => [...prev, newStep]);
+      } else {
+        // Auto mode: apply to steps missing a screenshot on this page
+        setSteps(prev => prev.map(s =>
+          s.pageTitle === title && !s.screenshot ? { ...s, screenshot: dataUrl } : s
+        ));
+      }
       message.success('Screenshot captured');
     } catch (e: any) { message.error('Capture failed: ' + e.message); }
   };
