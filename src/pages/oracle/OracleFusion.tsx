@@ -24,6 +24,13 @@ const { Option } = Select;
 
 const REDWOOD = '#C74634';
 
+interface CapturedField {
+  fieldName: string;
+  action: string;
+  value: string;
+  description: string;
+}
+
 interface Step {
   id: string;
   type: 'click' | 'input' | 'navigate' | 'snapshot';
@@ -35,6 +42,7 @@ interface Step {
   pageTitle: string;
   timestamp: number;
   screenshot?: string;
+  fields?: CapturedField[];  // consolidated fields from Capture Fields / Capture Tab
 }
 
 const FUSION_URLS = [
@@ -357,7 +365,7 @@ const generateUserManual = (steps: Step[]): string => {
     // Each snapshot step starts a new group and carries that group's screenshot.
     const nonNavSteps = sc.steps.filter(s => s.type !== 'navigate');
 
-    type Group = { screenshot: string; label: string; steps: (Step & { globalIdx: number })[] };
+    type Group = { screenshot: string; label: string; steps: (Step & { globalIdx: number })[]; fields?: CapturedField[] };
     const groups: Group[] = [];
     let current: Group = { screenshot: '', label: '', steps: [] };
 
@@ -365,7 +373,7 @@ const generateUserManual = (steps: Step[]): string => {
       if (step.type === 'snapshot') {
         // Push whatever we've accumulated so far (even if empty — preserves order)
         groups.push(current);
-        current = { screenshot: step.screenshot || '', label: step.fieldName || '', steps: [] };
+        current = { screenshot: step.screenshot || '', label: step.fieldName || '', steps: [], fields: step.fields };
       } else {
         current.steps.push(step);
       }
@@ -387,6 +395,45 @@ const generateUserManual = (steps: Step[]): string => {
              </div>
            </div>`
         : '';
+
+      // Consolidated fields from a "Capture Fields" or "Capture Tab" snapshot step
+      if (!g.steps.length && g.fields?.length) {
+        const fieldRows = g.fields.map((f, fidx) => {
+          const fa    = f.action || 'Enter';
+          const fColor = fa === 'Display' ? '#e65100' : (fa === 'Enter' || fa === 'Select' || fa === 'Check') ? '#2e7d32' : '#1565c0';
+          const fBg    = fa === 'Display' ? '#fff3e0' : (fa === 'Enter' || fa === 'Select' || fa === 'Check') ? '#e8f5e9' : '#e3f2fd';
+          const badge  = `<span style="display:inline-block;padding:1px 7px;border-radius:3px;font-size:10px;font-weight:700;background:${fBg};color:${fColor}">${fa}</span>`;
+          const explanation = fa === 'Display'
+            ? `<strong>${escapeHtml(f.fieldName)}</strong>: ${escapeHtml(f.value)}`
+            : fa === 'Enter'
+            ? `In the <strong>${escapeHtml(f.fieldName)}</strong> field, enter <strong>${escapeHtml(f.value)}</strong>.`
+            : fa === 'Select'
+            ? `In the <strong>${escapeHtml(f.fieldName)}</strong> field, select <strong>${escapeHtml(f.value)}</strong>.`
+            : `Click the <strong>${escapeHtml(f.fieldName)}</strong>.`;
+          return `
+          <tr>
+            <td style="text-align:center;font-weight:700;font-size:15px;color:#444;white-space:nowrap;">${fidx + 1}</td>
+            <td>${badge}</td>
+            <td style="font-weight:600;color:#222;">${escapeHtml(f.fieldName)}</td>
+            <td style="color:#555;">${f.value ? escapeHtml(f.value) : '—'}</td>
+            <td style="line-height:1.5;">${explanation}</td>
+          </tr>`;
+        }).join('\n');
+        const fieldTableHtml = `
+        <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;margin-bottom:8px;">
+          <thead>
+            <tr style="background:#f5f5f5;">
+              <th style="padding:9px 12px;border-bottom:2px solid #ddd;width:40px;">#</th>
+              <th style="padding:9px 12px;border-bottom:2px solid #ddd;width:72px;">Type</th>
+              <th style="padding:9px 12px;border-bottom:2px solid #ddd;width:170px;">Field / Element</th>
+              <th style="padding:9px 12px;border-bottom:2px solid #ddd;width:140px;">Value</th>
+              <th style="padding:9px 12px;border-bottom:2px solid #ddd;">Description</th>
+            </tr>
+          </thead>
+          <tbody>${fieldRows}</tbody>
+        </table>`;
+        return shotHtml + fieldTableHtml;
+      }
 
       if (!g.steps.length) return shotHtml;
 
@@ -723,6 +770,7 @@ const OracleFusion: React.FC = () => {
 
   // --- Preview ---
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string>('');
 
   // --- Step drag-and-drop ---
   const [dragIdx, setDragIdx]         = useState<number | null>(null);
@@ -1134,7 +1182,7 @@ const OracleFusion: React.FC = () => {
     };
   };
 
-  // ---- Capture Fields Snapshot ----
+  // ---- Capture Fields Snapshot (ONE consolidated step with all fields) ----
   const handleCaptureFields = async () => {
     const wv = webviewRef.current;
     if (!wv) return;
@@ -1152,26 +1200,37 @@ const OracleFusion: React.FC = () => {
       const dataUrl = shot?.resize?.({ width: 960 })?.toDataURL?.() || shot?.toDataURL?.() || '';
       if (dataUrl) lastScreenshotRef.current = dataUrl;
 
-      // Build enriched steps
       const now = Date.now();
-      const enriched: Step[] = captured.map((s: any, i: number) => ({
-        ...s,
-        id: now + i + Math.random() + '',
+      // ONE consolidated snapshot step carrying all fields
+      const snapshotStep: Step = {
+        id: now + 'fields' + Math.random(),
+        type: 'snapshot',
+        fieldName: currentTitle,
+        action: 'Snapshot',
+        value: `${captured.length} fields`,
+        description: `Fields captured: ${currentTitle}`,
+        url: wv.getURL?.() || '',
         pageTitle: currentTitle,
-        screenshot: undefined,
-      }));
+        timestamp: now,
+        screenshot: dataUrl || undefined,
+        fields: captured.map((s: any) => ({
+          fieldName: s.fieldName || '',
+          action: s.action || '',
+          value: s.value || '',
+          description: s.description || '',
+        })),
+      };
 
-      // APPEND the new fields — never remove existing steps or screenshots
+      // APPEND — never remove existing steps or screenshots
       setSteps(prev => {
-        // Apply the screenshot to the most recent navigate step for this screen if it has none
+        // Apply screenshot to most recent navigate step for this screen if it has none
         const withShot = dataUrl
           ? prev.map(s =>
               s.pageTitle === currentTitle && s.type === 'navigate' && !s.screenshot
-                ? { ...s, screenshot: dataUrl }
-                : s
+                ? { ...s, screenshot: dataUrl } : s
             )
           : prev;
-        return [...withShot, ...enriched];
+        return [...withShot, snapshotStep];
       });
 
       message.success(`Captured ${captured.length} fields from "${currentTitle}"`);
@@ -1199,30 +1258,30 @@ const OracleFusion: React.FC = () => {
       const dataUrl = shot?.resize?.({ width: 960 })?.toDataURL?.() || shot?.toDataURL?.() || '';
 
       const now = Date.now();
-      // Snapshot step — section marker carrying the screenshot
+      // ONE snapshot step carrying screenshot + all fields
       const snapshotStep: Step = {
         id: now + 'snap' + Math.random(),
         type: 'snapshot',
         fieldName: currentTitle,
         action: 'Snapshot',
-        value: '',
+        value: captured.length ? `${captured.length} fields` : '',
         description: `Screenshot: ${currentTitle}`,
         url: wv.getURL?.() || '',
         pageTitle: currentTitle,
         timestamp: now,
         screenshot: dataUrl,
+        fields: captured.length
+          ? captured.map((s: any) => ({
+              fieldName: s.fieldName || '',
+              action: s.action || '',
+              value: s.value || '',
+              description: s.description || '',
+            }))
+          : undefined,
       };
 
-      // Field steps — appended after snapshot
-      const enriched: Step[] = captured.map((s: any, i: number) => ({
-        ...s,
-        id: now + i + Math.random() + '',
-        pageTitle: currentTitle,
-        screenshot: undefined,
-      }));
-
       // Always APPEND — never replace — so every tab is preserved independently
-      setSteps(prev => [...prev, snapshotStep, ...enriched]);
+      setSteps(prev => [...prev, snapshotStep]);
 
       if (captured.length > 0) {
         message.success(`Captured screenshot + ${captured.length} fields from "${currentTitle}"`);
@@ -1275,6 +1334,21 @@ const OracleFusion: React.FC = () => {
     } catch {
       message.error({ content: 'Failed to generate Word document', key });
     }
+  };
+
+  // ---- Preview (Blob URL avoids srcDoc size limit with many screenshots) ----
+  const handleOpenPreview = () => {
+    if (!steps.length) return;
+    const html = generateUserManual(steps);
+    const blob = new Blob([html], { type: 'text/html' });
+    const blobUrl = URL.createObjectURL(blob);
+    setPreviewUrl(blobUrl);
+    setPreviewOpen(true);
+  };
+
+  const handleClosePreview = () => {
+    setPreviewOpen(false);
+    if (previewUrl) { URL.revokeObjectURL(previewUrl); setPreviewUrl(''); }
   };
 
   // ---- Manual screenshot capture (used when autoShot=false) ----
@@ -1576,6 +1650,11 @@ const OracleFusion: React.FC = () => {
                             </Tooltip>
                           </div>
                           <div style={{ fontSize: 11, color: '#e0e0e0', wordBreak: 'break-word', lineHeight: 1.4 }}>{s.description}</div>
+                          {s.fields?.length ? (
+                            <div style={{ fontSize: 10, color: '#a78bfa', marginTop: 3 }}>
+                              📋 {s.fields.length} field{s.fields.length !== 1 ? 's' : ''} captured
+                            </div>
+                          ) : null}
                           {s.pageTitle && <div style={{ fontSize: 10, color: '#555', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.pageTitle}</div>}
                           {s.screenshot && (
                             <Tooltip title="Click to annotate" placement="left">
@@ -1662,7 +1741,7 @@ const OracleFusion: React.FC = () => {
               <div style={{ display: 'flex', gap: 4 }}>
                 <Button
                   style={{ flex: 1, background: steps.length ? '#6a1b9a' : '#333', border: 'none', color: '#fff', fontSize: 12 }}
-                  onClick={() => setPreviewOpen(true)}
+                  onClick={handleOpenPreview}
                   disabled={!steps.length}
                 >
                   👁 Preview
@@ -1683,7 +1762,7 @@ const OracleFusion: React.FC = () => {
     {/* ── User Manual Preview Modal ── */}
     <Modal
       open={previewOpen}
-      onCancel={() => setPreviewOpen(false)}
+      onCancel={handleClosePreview}
       width="92vw"
       style={{ top: 16 }}
       title="User Manual Preview"
@@ -1691,14 +1770,13 @@ const OracleFusion: React.FC = () => {
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <Button onClick={handleGenerateManual} icon={<FileTextOutlined />}>Download HTML</Button>
           <Button onClick={handleGenerateWordManual} style={{ background: '#1565c0', color: '#fff', border: 'none' }}>Download Word</Button>
-          <Button onClick={() => setPreviewOpen(false)}>Close</Button>
+          <Button onClick={handleClosePreview}>Close</Button>
         </div>
       }
     >
       <iframe
-        srcDoc={steps.length ? generateUserManual(steps) : ''}
+        src={previewUrl}
         style={{ width: '100%', height: 'calc(90vh - 130px)', border: 'none', borderRadius: 4 }}
-        sandbox="allow-same-origin"
         title="User Manual Preview"
       />
     </Modal>
