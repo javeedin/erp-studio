@@ -605,7 +605,7 @@ async function buildWordManual(steps: Step[]): Promise<Blob> {
       const img = await loadImgForWord(shotStep.screenshot);
       if (img && img.data.length > 0) {
         docChildren.push(new Paragraph({
-          children: [new ImageRun({ data: img.data, transformation: { width: img.width, height: img.height } })],
+          children: [new ImageRun({ type: 'png', data: img.data, transformation: { width: img.width, height: img.height } })],
           spacing: { after: 160 },
         }));
       }

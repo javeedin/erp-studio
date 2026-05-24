@@ -119,8 +119,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // Step 2a: Electron — send via nodemailer
-      if (window.electronAPI?.isElectron && window.electronAPI.sendOtpEmail) {
-        const emailResult = await window.electronAPI.sendOtpEmail(data.email, data.otp);
+      if ((window as any).electronAPI?.isElectron && (window as any).electronAPI.sendOtpEmail) {
+        const emailResult = await (window as any).electronAPI.sendOtpEmail(data.email, data.otp);
         if (!emailResult.success) {
           return { status: 'EMAIL_ERROR', message: `OTP generated but email failed: ${emailResult.error}` };
         }
