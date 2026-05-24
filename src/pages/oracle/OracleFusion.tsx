@@ -13,6 +13,11 @@ import {
 } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
 import ScreenshotAnnotator from '../../components/ScreenshotAnnotator';
+import {
+  Document, Packer, Paragraph, Table, TableRow, TableCell,
+  ImageRun, HeadingLevel, TextRun, WidthType, ShadingType,
+  AlignmentType,
+} from 'docx';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -545,6 +550,142 @@ const generateUATScript = (steps: Step[]): string => {
 </body>
 </html>`;
 };
+
+// ── Word export helpers ───────────────────────────────────────────────────────
+async function loadImgForWord(dataUrl: string): Promise<{ data: Uint8Array; width: number; height: number } | null> {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const base64 = dataUrl.split(',')[1];
+        const binary = atob(base64);
+        const data = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) data[i] = binary.charCodeAt(i);
+        const maxW = 580;
+        const scale = img.width > maxW ? maxW / img.width : 1;
+        resolve({ data, width: Math.round(img.width * scale), height: Math.round(img.height * scale) });
+      } catch { resolve(null); }
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+}
+
+function groupByScreen(steps: Step[]) {
+  const screens: { title: string; steps: Step[] }[] = [];
+  for (const s of steps) {
+    const title = s.pageTitle || 'Oracle Fusion';
+    let sc = screens.find(x => x.title === title);
+    if (!sc) { sc = { title, steps: [] }; screens.push(sc); }
+    sc.steps.push(s);
+  }
+  return screens;
+}
+
+async function buildWordManual(steps: Step[]): Promise<Blob> {
+  const screens = groupByScreen(steps);
+  const docChildren: any[] = [
+    new Paragraph({ text: 'User Manual — Oracle Fusion', heading: HeadingLevel.TITLE }),
+    new Paragraph({
+      children: [new TextRun({ text: `Generated: ${new Date().toLocaleString()}  |  Steps: ${steps.length}`, color: '888888', size: 20 })],
+    }),
+    new Paragraph({ text: '' }),
+  ];
+
+  let globalIdx = 0;
+  for (const screen of screens) {
+    docChildren.push(new Paragraph({
+      text: screen.title,
+      heading: HeadingLevel.HEADING_1,
+      spacing: { before: 320, after: 160 },
+    }));
+
+    const shotStep = screen.steps.find(s => s.screenshot);
+    if (shotStep?.screenshot) {
+      const img = await loadImgForWord(shotStep.screenshot);
+      if (img && img.data.length > 0) {
+        docChildren.push(new Paragraph({
+          children: [new ImageRun({ data: img.data, transformation: { width: img.width, height: img.height } })],
+          spacing: { after: 160 },
+        }));
+      }
+    }
+
+    const actionSteps = screen.steps.filter(s => s.type !== 'navigate' && s.type !== 'snapshot');
+    if (actionSteps.length > 0) {
+      const headerRow = new TableRow({
+        tableHeader: true,
+        children: ['#', 'Type', 'Field / Element', 'Value', 'Description'].map(txt =>
+          new TableCell({
+            shading: { type: ShadingType.SOLID, fill: 'C74634' },
+            children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: txt, bold: true, color: 'FFFFFF', size: 20 })] })],
+          })
+        ),
+      });
+      const dataRows = actionSteps.map(s => {
+        globalIdx++;
+        return new TableRow({
+          children: [
+            new TableCell({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: String(globalIdx), size: 20 })] })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: s.type, size: 20 })] })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: s.fieldName || '', size: 20 })] })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: s.value || '', size: 20 })] })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: s.description || '', size: 20 })] })] }),
+          ],
+        });
+      });
+      docChildren.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow, ...dataRows] }));
+    }
+    docChildren.push(new Paragraph({ text: '' }));
+  }
+
+  const doc = new Document({ sections: [{ children: docChildren }] });
+  return Packer.toBlob(doc);
+}
+
+async function buildWordUAT(steps: Step[]): Promise<Blob> {
+  const headerRow = new TableRow({
+    tableHeader: true,
+    children: ['#', 'Screen', 'Step Description', 'Expected Result', 'Result', 'Comments'].map(txt =>
+      new TableCell({
+        shading: { type: ShadingType.SOLID, fill: 'C74634' },
+        children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: txt, bold: true, color: 'FFFFFF', size: 20 })] })],
+      })
+    ),
+  });
+  const dataRows = steps.map((s, i) =>
+    new TableRow({
+      children: [
+        new TableCell({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: String(i + 1), size: 20 })] })] }),
+        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: s.pageTitle || 'Oracle Fusion', size: 20 })] })] }),
+        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: s.description || '', size: 20 })] })] }),
+        new TableCell({ children: [new Paragraph({ text: '' })] }),
+        new TableCell({ children: [new Paragraph({ text: '' })] }),
+        new TableCell({ children: [new Paragraph({ text: '' })] }),
+      ],
+    })
+  );
+
+  const doc = new Document({
+    sections: [{
+      children: [
+        new Paragraph({ text: 'UAT Test Script — Oracle Fusion', heading: HeadingLevel.TITLE }),
+        new Paragraph({ children: [new TextRun({ text: `Generated: ${new Date().toLocaleString()}  |  Steps: ${steps.length}`, color: '888888', size: 20 })] }),
+        new Paragraph({ text: '' }),
+        new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow, ...dataRows] }),
+      ],
+    }],
+  });
+  return Packer.toBlob(doc);
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
 
 const isElectron = () => !!(window as any).electronAPI?.isElectron;
 const formatTime = (s: number) =>
@@ -1096,6 +1237,32 @@ const OracleFusion: React.FC = () => {
     message.success('UAT Script downloaded');
   };
 
+  const handleGenerateWordManual = async () => {
+    if (!steps.length) { message.warning('No steps recorded yet'); return; }
+    const key = 'word-manual';
+    message.loading({ content: 'Building Word document…', key });
+    try {
+      const blob = await buildWordManual(steps);
+      downloadBlob(blob, `UserManual_OracleFusion_${new Date().toISOString().slice(0, 10)}.docx`);
+      message.success({ content: 'Word document downloaded', key });
+    } catch {
+      message.error({ content: 'Failed to generate Word document', key });
+    }
+  };
+
+  const handleGenerateWordUAT = async () => {
+    if (!steps.length) { message.warning('No steps recorded yet'); return; }
+    const key = 'word-uat';
+    message.loading({ content: 'Building Word document…', key });
+    try {
+      const blob = await buildWordUAT(steps);
+      downloadBlob(blob, `UATScript_OracleFusion_${new Date().toISOString().slice(0, 10)}.docx`);
+      message.success({ content: 'Word document downloaded', key });
+    } catch {
+      message.error({ content: 'Failed to generate Word document', key });
+    }
+  };
+
   return (
     <>
     <Layout style={{ height: 'calc(100vh - 64px)', display: 'flex', flexDirection: 'column', background: '#1a1a2e', overflow: 'hidden' }}>
@@ -1311,25 +1478,49 @@ const OracleFusion: React.FC = () => {
             </div>
 
             {/* Action Buttons */}
-            <div style={{ padding: '12px 14px', borderTop: '1px solid #333', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <Button
-                block
-                icon={<FileTextOutlined />}
-                onClick={handleGenerateManual}
-                disabled={!steps.length}
-                style={{ background: steps.length ? '#1565c0' : '#333', border: 'none', color: '#fff' }}
-              >
-                Generate User Manual
-              </Button>
-              <Button
-                block
-                icon={<CheckSquareOutlined />}
-                onClick={handleGenerateUAT}
-                disabled={!steps.length}
-                style={{ background: steps.length ? '#2e7d32' : '#333', border: 'none', color: '#fff' }}
-              >
-                Generate UAT Script
-              </Button>
+            <div style={{ padding: '12px 14px', borderTop: '1px solid #333', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {/* User Manual row */}
+              <div style={{ display: 'flex', gap: 4 }}>
+                <Button
+                  style={{ flex: 1, background: steps.length ? '#1565c0' : '#333', border: 'none', color: '#fff', fontSize: 12 }}
+                  icon={<FileTextOutlined />}
+                  onClick={handleGenerateManual}
+                  disabled={!steps.length}
+                >
+                  User Manual
+                </Button>
+                <Tooltip title="Download as Word (.docx)">
+                  <Button
+                    style={{ background: steps.length ? '#1e4080' : '#333', border: 'none', color: '#fff', fontSize: 11 }}
+                    onClick={handleGenerateWordManual}
+                    disabled={!steps.length}
+                  >
+                    W↓
+                  </Button>
+                </Tooltip>
+              </div>
+
+              {/* UAT Script row */}
+              <div style={{ display: 'flex', gap: 4 }}>
+                <Button
+                  style={{ flex: 1, background: steps.length ? '#2e7d32' : '#333', border: 'none', color: '#fff', fontSize: 12 }}
+                  icon={<CheckSquareOutlined />}
+                  onClick={handleGenerateUAT}
+                  disabled={!steps.length}
+                >
+                  UAT Script
+                </Button>
+                <Tooltip title="Download as Word (.docx)">
+                  <Button
+                    style={{ background: steps.length ? '#1b5e20' : '#333', border: 'none', color: '#fff', fontSize: 11 }}
+                    onClick={handleGenerateWordUAT}
+                    disabled={!steps.length}
+                  >
+                    W↓
+                  </Button>
+                </Tooltip>
+              </div>
+
               <Button
                 block
                 icon={<DeleteOutlined />}

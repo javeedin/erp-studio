@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Modal, Button, Tooltip } from 'antd';
+import { Modal, Button, Tooltip, Spin } from 'antd';
 import { UndoOutlined, SaveOutlined } from '@ant-design/icons';
 
 type Tool = 'pen' | 'arrow' | 'rect' | 'circle';
@@ -31,34 +31,46 @@ const WIDTHS = [2, 4, 8];
 
 const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) => {
   const canvasRef               = useRef<HTMLCanvasElement>(null);
+  const loadedImg               = useRef<HTMLImageElement | null>(null);
+  const [ready, setReady]       = useState(false);
   const [tool, setTool]         = useState<Tool>('arrow');
   const [color, setColor]       = useState('#ff3333');
   const [lineWidth, setLineWidth] = useState(3);
   const [undoStack, setUndoStack] = useState<ImageData[]>([]);
-  const [dims, setDims]         = useState({ w: 860, h: 500 });
 
   const isDrawing = useRef(false);
   const startPos  = useRef<{ x: number; y: number } | null>(null);
   const baseSnap  = useRef<ImageData | null>(null);
 
+  // Phase 1: load image
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d')!;
     const img = new Image();
     img.onload = () => {
-      const maxW = 860;
-      const scale = img.width > maxW ? maxW / img.width : 1;
-      const w = Math.round(img.width * scale);
-      const h = Math.round(img.height * scale);
-      canvas.width  = w;
-      canvas.height = h;
-      setDims({ w, h });
-      ctx.drawImage(img, 0, 0, w, h);
-      baseSnap.current = ctx.getImageData(0, 0, w, h);
+      loadedImg.current = img;
+      setReady(true);
     };
+    img.onerror = () => setReady(true); // show blank canvas on error
     img.src = screenshot;
   }, [screenshot]);
+
+  // Phase 2: draw image onto canvas once it's loaded AND mounted
+  useEffect(() => {
+    if (!ready || !canvasRef.current || !loadedImg.current) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const img = loadedImg.current;
+
+    const maxW = Math.min(window.innerWidth * 0.82, 1100);
+    const scale = img.width > maxW ? maxW / img.width : 1;
+    const w = Math.round(img.width * scale);
+    const h = Math.round(img.height * scale);
+
+    canvas.width  = w;
+    canvas.height = h;
+    ctx.drawImage(img, 0, 0, w, h);
+    baseSnap.current = ctx.getImageData(0, 0, w, h);
+  }, [ready]);
 
   const getPos = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current!;
@@ -108,7 +120,6 @@ const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) =
     const ctx = canvas.getContext('2d')!;
     const pos = getPos(e);
 
-    // snapshot before this stroke (for undo)
     const snap = ctx.getImageData(0, 0, canvas.width, canvas.height);
     setUndoStack(prev => [...prev, snap]);
     baseSnap.current = snap;
@@ -137,7 +148,6 @@ const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) =
       return;
     }
 
-    // shape tools: restore base then draw preview
     if (baseSnap.current) ctx.putImageData(baseSnap.current, 0, 0);
     const { x: x1, y: y1 } = startPos.current;
     const { x: x2, y: y2 } = pos;
@@ -183,92 +193,19 @@ const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) =
     onSave(canvas.toDataURL('image/png'));
   };
 
-  const modalWidth = Math.min(dims.w + 48, typeof window !== 'undefined' ? window.innerWidth - 40 : 960);
-
-  const toolbar = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingRight: 32 }}>
-      {/* Tools */}
-      <div style={{ display: 'flex', gap: 4 }}>
-        {TOOLS.map(t => (
-          <Button
-            key={t.key}
-            size="small"
-            type={tool === t.key ? 'primary' : 'default'}
-            onClick={() => setTool(t.key)}
-            style={tool === t.key ? { background: '#1565c0', borderColor: '#1565c0' } : {}}
-          >
-            {t.label}
-          </Button>
-        ))}
-      </div>
-
-      <div style={{ width: 1, height: 22, background: '#e0e0e0' }} />
-
-      {/* Colors */}
-      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-        {COLORS.map(c => (
-          <Tooltip key={c.value} title={c.label} placement="bottom">
-            <div
-              onClick={() => setColor(c.value)}
-              style={{
-                width: 20, height: 20, borderRadius: '50%',
-                background: c.value,
-                border: color === c.value
-                  ? '3px solid #1890ff'
-                  : c.value === '#ffffff' ? '2px solid #ccc' : '2px solid transparent',
-                cursor: 'pointer',
-                flexShrink: 0,
-                boxSizing: 'border-box',
-              }}
-            />
-          </Tooltip>
-        ))}
-      </div>
-
-      <div style={{ width: 1, height: 22, background: '#e0e0e0' }} />
-
-      {/* Line widths */}
-      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-        {WIDTHS.map(w => (
-          <Tooltip key={w} title={`Size ${w}`} placement="bottom">
-            <div
-              onClick={() => setLineWidth(w)}
-              style={{
-                width: 30, height: 22,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                cursor: 'pointer',
-                border: lineWidth === w ? '1px solid #1890ff' : '1px solid #d9d9d9',
-                borderRadius: 3,
-                background: lineWidth === w ? '#e6f4ff' : '#fafafa',
-              }}
-            >
-              <div style={{ width: 16, height: w, background: '#333', borderRadius: w }} />
-            </div>
-          </Tooltip>
-        ))}
-      </div>
-
-      <div style={{ width: 1, height: 22, background: '#e0e0e0' }} />
-
-      <Tooltip title="Undo last mark" placement="bottom">
-        <Button
-          size="small"
-          icon={<UndoOutlined />}
-          onClick={handleUndo}
-          disabled={undoStack.length === 0}
-        />
-      </Tooltip>
-    </div>
+  const modalW = Math.min(
+    (loadedImg.current?.width ?? 900) + 80,
+    typeof window !== 'undefined' ? window.innerWidth - 40 : 1200,
   );
 
   return (
     <Modal
       open
       onCancel={onClose}
-      width={modalWidth}
-      centered
+      width={Math.max(modalW, 700)}
+      style={{ top: 20 }}
       destroyOnClose
-      title={toolbar}
+      title="Annotate Screenshot"
       footer={
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <Button onClick={onClose}>Cancel</Button>
@@ -276,6 +213,7 @@ const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) =
             type="primary"
             icon={<SaveOutlined />}
             onClick={handleSave}
+            disabled={!ready}
             style={{ background: '#1565c0', borderColor: '#1565c0' }}
           >
             Save Annotation
@@ -283,15 +221,108 @@ const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) =
         </div>
       }
     >
-      <div style={{ overflow: 'auto', maxHeight: 'calc(80vh - 140px)', textAlign: 'center', background: '#222' }}>
-        <canvas
-          ref={canvasRef}
-          style={{ cursor: 'crosshair', maxWidth: '100%', display: 'block', margin: '0 auto' }}
-          onMouseDown={onMouseDown}
-          onMouseMove={onMouseMove}
-          onMouseUp={onMouseUp}
-          onMouseLeave={onMouseUp}
-        />
+      {/* Toolbar */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+        padding: '8px 0 12px', borderBottom: '1px solid #e8e8e8', marginBottom: 12,
+      }}>
+        {/* Tools */}
+        <div style={{ display: 'flex', gap: 4 }}>
+          {TOOLS.map(t => (
+            <Button
+              key={t.key}
+              size="small"
+              type={tool === t.key ? 'primary' : 'default'}
+              onClick={() => setTool(t.key)}
+              style={tool === t.key ? { background: '#1565c0', borderColor: '#1565c0' } : {}}
+            >
+              {t.label}
+            </Button>
+          ))}
+        </div>
+
+        <div style={{ width: 1, height: 22, background: '#e0e0e0' }} />
+
+        {/* Colors */}
+        <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+          {COLORS.map(c => (
+            <Tooltip key={c.value} title={c.label} placement="bottom">
+              <div
+                onClick={() => setColor(c.value)}
+                style={{
+                  width: 22, height: 22, borderRadius: '50%',
+                  background: c.value,
+                  border: color === c.value
+                    ? '3px solid #1890ff'
+                    : c.value === '#ffffff' ? '2px solid #bbb' : '2px solid transparent',
+                  cursor: 'pointer', flexShrink: 0, boxSizing: 'border-box',
+                  boxShadow: color === c.value ? '0 0 0 1px #1890ff' : 'none',
+                }}
+              />
+            </Tooltip>
+          ))}
+        </div>
+
+        <div style={{ width: 1, height: 22, background: '#e0e0e0' }} />
+
+        {/* Line widths */}
+        <div style={{ display: 'flex', gap: 4 }}>
+          {WIDTHS.map(w => (
+            <Tooltip key={w} title={`Size ${w}`} placement="bottom">
+              <div
+                onClick={() => setLineWidth(w)}
+                style={{
+                  width: 34, height: 24,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  cursor: 'pointer',
+                  border: lineWidth === w ? '1.5px solid #1890ff' : '1px solid #d9d9d9',
+                  borderRadius: 4,
+                  background: lineWidth === w ? '#e6f4ff' : '#fafafa',
+                }}
+              >
+                <div style={{ width: 18, height: w, background: '#333', borderRadius: w }} />
+              </div>
+            </Tooltip>
+          ))}
+        </div>
+
+        <div style={{ width: 1, height: 22, background: '#e0e0e0' }} />
+
+        <Tooltip title="Undo last mark" placement="bottom">
+          <Button
+            size="small"
+            icon={<UndoOutlined />}
+            onClick={handleUndo}
+            disabled={undoStack.length === 0}
+          />
+        </Tooltip>
+      </div>
+
+      {/* Canvas area */}
+      <div style={{
+        overflow: 'auto',
+        maxHeight: 'calc(100vh - 280px)',
+        background: '#333',
+        borderRadius: 6,
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'center',
+        minHeight: 200,
+      }}>
+        {!ready ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: 200 }}>
+            <Spin tip="Loading screenshot…" />
+          </div>
+        ) : (
+          <canvas
+            ref={canvasRef}
+            style={{ cursor: 'crosshair', display: 'block', maxWidth: '100%' }}
+            onMouseDown={onMouseDown}
+            onMouseMove={onMouseMove}
+            onMouseUp={onMouseUp}
+            onMouseLeave={onMouseUp}
+          />
+        )}
       </div>
     </Modal>
   );

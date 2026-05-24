@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "electron": "electron .",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:build":     "npm run build && electron-builder",
+    "electron:build": "npm run build && electron-builder",
     "electron:build:win": "npm run build && electron-builder --win",
     "electron:build:mac": "npm run build && electron-builder --mac",
     "electron:build:linux": "npm run build && electron-builder --linux"
@@ -18,6 +18,7 @@
   "dependencies": {
     "@ant-design/icons": "^6.1.0",
     "antd": "^6.1.0",
+    "docx": "^9.6.1",
     "file-saver": "^2.0.5",
     "nodemailer": "^8.0.4",
     "react": "^19.2.0",
@@ -43,18 +44,32 @@
   "build": {
     "appId": "com.buimerc.erp-studio",
     "productName": "ERP Studio",
-    "directories": { "output": "dist-electron" },
+    "directories": {
+      "output": "dist-electron"
+    },
     "files": [
       "dist/**/*",
       "electron/**/*",
       "public/**/*"
     ],
     "asar": true,
-    "asarUnpack": ["electron/**/*"],
+    "asarUnpack": [
+      "electron/**/*"
+    ],
     "win": {
       "target": [
-        { "target": "portable", "arch": ["x64"] },
-        { "target": "nsis",     "arch": ["x64"] }
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "public/icons/icon-512.png"
     },
