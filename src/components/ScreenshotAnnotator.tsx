@@ -37,7 +37,7 @@ const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) =
 
   const [loaded, setLoaded]       = useState(false);
   const [dispSize, setDispSize]   = useState({ w: 0, h: 0 });
-  const [tool, setTool]           = useState<Tool>('arrow');
+  const [tool, setTool]           = useState<Tool>('rect');
   const [color, setColor]         = useState('#ff3333');
   const [lineWidth, setLineWidth] = useState(3);
   const [undoStack, setUndoStack] = useState<ImageData[]>([]);
@@ -182,21 +182,30 @@ const ScreenshotAnnotator: React.FC<Props> = ({ screenshot, onSave, onClose }) =
     setUndoStack(s => s.slice(0, -1));
   };
 
-  // Composite: draw the img onto an offscreen canvas, then draw annotations on top
+  // Composite at full natural resolution to avoid blur
   const handleSave = () => {
-    const img    = imgRef.current;
+    const img       = imgRef.current;
     const annCanvas = canvasRef.current;
     if (!img || !annCanvas) return;
 
+    const nw = img.naturalWidth;
+    const nh = img.naturalHeight;
+
     const offscreen = document.createElement('canvas');
-    offscreen.width  = annCanvas.width;
-    offscreen.height = annCanvas.height;
+    offscreen.width  = nw;
+    offscreen.height = nh;
     const ctx = offscreen.getContext('2d')!;
 
-    // Draw the original screenshot (img element renders it correctly)
-    ctx.drawImage(img, 0, 0, annCanvas.width, annCanvas.height);
-    // Draw annotations on top (transparent canvas with just the marks)
+    // Draw original screenshot at full natural resolution
+    ctx.drawImage(img, 0, 0, nw, nh);
+
+    // Scale annotations from display size up to natural size, then composite
+    const scaleX = nw / annCanvas.width;
+    const scaleY = nh / annCanvas.height;
+    ctx.save();
+    ctx.scale(scaleX, scaleY);
     ctx.drawImage(annCanvas, 0, 0);
+    ctx.restore();
 
     onSave(offscreen.toDataURL('image/png'));
   };

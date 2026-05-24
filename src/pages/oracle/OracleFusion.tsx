@@ -823,6 +823,11 @@ const OracleFusion: React.FC = () => {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string>('');
 
+  // --- Manual management ---
+  const [manualName, setManualName]             = useState<string>('');
+  const [newManualModalOpen, setNewManualModalOpen] = useState(false);
+  const [newManualNameInput, setNewManualNameInput] = useState('');
+
   // --- Step drag-and-drop ---
   const [dragIdx, setDragIdx]         = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
@@ -966,12 +971,45 @@ const OracleFusion: React.FC = () => {
     }
   };
 
+  // ---- Manual management ----
+  const handleNewManualClick = () => {
+    if (steps.length > 0) {
+      Modal.confirm({
+        title: 'Save existing manual first?',
+        content: `"${manualName || 'Current manual'}" has ${steps.length} step${steps.length !== 1 ? 's' : ''}. Save it before starting a new one.`,
+        okText: 'Save & Continue',
+        cancelText: 'Discard & Continue',
+        onOk: () => {
+          handleGenerateWordManual();
+          setNewManualNameInput('');
+          setNewManualModalOpen(true);
+        },
+        onCancel: () => {
+          setNewManualNameInput('');
+          setNewManualModalOpen(true);
+        },
+      });
+    } else {
+      setNewManualNameInput('');
+      setNewManualModalOpen(true);
+    }
+  };
+
+  const handleStartManualPreparation = async () => {
+    const name = newManualNameInput.trim();
+    if (!name) { message.warning('Please enter a manual name'); return; }
+    setManualName(name);
+    setNewManualModalOpen(false);
+    setSteps([]);
+    autoShotRef.current = autoShot;
+    await startTracking();
+  };
+
   // ---- Step Tracking ----
   const startTracking = async () => {
     const wv = webviewRef.current;
     if (!wv) { message.warning('WebView not ready'); return; }
     setTracking(true);
-    setSteps([]);
     setShowPanel(true);
     trackingRef.current = true;
     lastScreenshotRef.current = '';
@@ -2004,17 +2042,26 @@ const OracleFusion: React.FC = () => {
             display: 'flex', flexDirection: 'column', flexShrink: 0,
           }}>
             {/* Panel Header */}
-            <div style={{ padding: '10px 14px', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <AimOutlined style={{ color: tracking ? '#ff6b35' : '#888', fontSize: 15 }} />
-              <Text style={{ color: '#fff', fontWeight: 600, flex: 1 }}>
-                Steps {steps.length > 0 && <Tag color="blue" style={{ marginLeft: 4 }}>{steps.length}</Tag>}
-              </Text>
-              {tracking && (
-                <span style={{ fontSize: 11, color: '#ff6b35', animation: 'pulse-trk 1s infinite' }}>● LIVE</span>
-              )}
-              <Tooltip title="Close panel">
-                <CloseOutlined style={{ color: '#888', cursor: 'pointer' }} onClick={() => setShowPanel(false)} />
-              </Tooltip>
+            <div style={{ padding: '10px 14px', borderBottom: '1px solid #333' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: manualName ? 6 : 0 }}>
+                <AimOutlined style={{ color: tracking ? '#ff6b35' : '#888', fontSize: 15 }} />
+                <Text style={{ color: '#fff', fontWeight: 600, flex: 1, fontSize: 13 }}>
+                  {manualName || 'Steps'} {steps.length > 0 && <Tag color="blue" style={{ marginLeft: 4 }}>{steps.length}</Tag>}
+                </Text>
+                {tracking && (
+                  <span style={{ fontSize: 11, color: '#ff6b35', animation: 'pulse-trk 1s infinite' }}>● LIVE</span>
+                )}
+                <Tooltip title="Close panel">
+                  <CloseOutlined style={{ color: '#888', cursor: 'pointer' }} onClick={() => setShowPanel(false)} />
+                </Tooltip>
+              </div>
+              <Button
+                size="small"
+                style={{ width: '100%', background: '#1565c0', border: 'none', color: '#fff', fontWeight: 600, fontSize: 12 }}
+                onClick={handleNewManualClick}
+              >
+                + Create New User Manual
+              </Button>
             </div>
 
             {/* Steps List */}
@@ -2023,7 +2070,7 @@ const OracleFusion: React.FC = () => {
                 <div style={{ padding: 30, textAlign: 'center' }}>
                   <AimOutlined style={{ fontSize: 32, color: '#555', display: 'block', marginBottom: 10 }} />
                   <Text style={{ color: '#666', fontSize: 13 }}>
-                    {tracking ? 'Perform actions in Oracle Fusion…' : 'Click "Track Steps" to start capturing'}
+                    {tracking ? 'Perform actions in Oracle Fusion…' : 'Click "+ Create New User Manual" to begin'}
                   </Text>
                 </div>
               ) : (
@@ -2176,6 +2223,39 @@ const OracleFusion: React.FC = () => {
         )}
       </div>
     </Layout>
+
+    {/* ── Create New User Manual Modal ── */}
+    <Modal
+      open={newManualModalOpen}
+      onCancel={() => setNewManualModalOpen(false)}
+      title="Create New User Manual"
+      footer={null}
+      destroyOnClose
+      width={420}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '8px 0' }}>
+        <div>
+          <div style={{ fontSize: 13, color: '#555', marginBottom: 8 }}>Enter a name for this manual:</div>
+          <Input
+            autoFocus
+            placeholder="e.g. Create Purchase Order"
+            value={newManualNameInput}
+            onChange={e => setNewManualNameInput(e.target.value)}
+            onPressEnter={handleStartManualPreparation}
+            size="large"
+          />
+        </div>
+        <Button
+          type="primary"
+          size="large"
+          style={{ background: '#1565c0', borderColor: '#1565c0', fontWeight: 600 }}
+          disabled={!newManualNameInput.trim()}
+          onClick={handleStartManualPreparation}
+        >
+          Start Manual Preparation
+        </Button>
+      </div>
+    </Modal>
 
     {/* ── User Manual Preview Modal ── */}
     <Modal
