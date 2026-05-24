@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import {
   Layout, Typography, Button, Input, Tooltip, Breadcrumb,
-  Select, message, Tag, Badge, Modal, Form,
+  Select, message, Tag, Badge, Modal, Form, Switch,
 } from 'antd';
 import {
   HomeOutlined, ReloadOutlined, ArrowLeftOutlined, ArrowRightOutlined,
@@ -714,8 +714,19 @@ const OracleFusion: React.FC = () => {
   // Rolling screenshot updated every 2s while tracking — applied to steps on navigate away
   const lastScreenshotRef = useRef<string>('');
 
+  // --- Auto screenshot toggle ---
+  const [autoShot, setAutoShot] = useState(true);
+  const autoShotRef = useRef(true);
+
   // --- Annotation ---
   const [annotatingStepId, setAnnotatingStepId] = useState<string | null>(null);
+
+  // --- Preview ---
+  const [previewOpen, setPreviewOpen] = useState(false);
+
+  // --- Step drag-and-drop ---
+  const [dragIdx, setDragIdx]         = useState<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
 
   // --- Saved credentials ---
   const [credsModalOpen, setCredsModalOpen] = useState(false);
@@ -751,9 +762,8 @@ const OracleFusion: React.FC = () => {
     };
 
     // BEFORE leaving a screen: capture it while fields are still filled in.
-    // Apply screenshot to all steps belonging to that screen that don't have one yet.
     const onWillNavigate = async () => {
-      if (!trackingRef.current) return;
+      if (!trackingRef.current || !autoShotRef.current) return;
       const leavingTitle = currentPageTitleRef.current;
       const dataUrl = await captureShot();
       if (dataUrl && leavingTitle) {
@@ -794,13 +804,14 @@ const OracleFusion: React.FC = () => {
         }]);
 
         // Capture screenshot of the new screen once it has fully rendered
-        setTimeout(async () => {
-          const dataUrl = await captureShot();
-          if (dataUrl) {
-            // Apply ONLY to the navigate step we just added (keyed by id)
-            setSteps(prev => prev.map(s => s.id === navId ? { ...s, screenshot: dataUrl } : s));
-          }
-        }, 1000);
+        if (autoShotRef.current) {
+          setTimeout(async () => {
+            const dataUrl = await captureShot();
+            if (dataUrl) {
+              setSteps(prev => prev.map(s => s.id === navId ? { ...s, screenshot: dataUrl } : s));
+            }
+          }, 1000);
+        }
       } catch (_) {}
     };
 
@@ -856,15 +867,17 @@ const OracleFusion: React.FC = () => {
     try { currentPageTitleRef.current = await wv.executeJavaScript('document.title'); } catch (_) {}
     await injectTracking(wv);
 
-    // ── Rolling screenshot every 2s (shows filled-in state of current screen) ──
-    screenshotIntervalRef.current = setInterval(async () => {
-      if (!trackingRef.current) return;
-      try {
-        const shot = await wv.capturePage();
-        const url = shot?.resize?.({ width: 960 })?.toDataURL?.() || shot?.toDataURL?.() || '';
-        if (url) lastScreenshotRef.current = url;
-      } catch (_) {}
-    }, 2000);
+    // ── Rolling screenshot every 2s (auto mode only) ──
+    if (autoShotRef.current) {
+      screenshotIntervalRef.current = setInterval(async () => {
+        if (!trackingRef.current || !autoShotRef.current) return;
+        try {
+          const shot = await wv.capturePage();
+          const url = shot?.resize?.({ width: 960 })?.toDataURL?.() || shot?.toDataURL?.() || '';
+          if (url) lastScreenshotRef.current = url;
+        } catch (_) {}
+      }, 2000);
+    }
 
     // ── Poll every 800ms: collect steps + detect SPA navigation by title change ──
     pollRef.current = setInterval(async () => {
@@ -880,8 +893,8 @@ const OracleFusion: React.FC = () => {
           const oldTitle = currentPageTitleRef.current;
           const navId = Date.now() + Math.random() + '';
 
-          // 1. Apply last rolling screenshot to all steps from the OLD screen (filled state)
-          if (lastScreenshotRef.current && oldTitle) {
+          // 1. Apply last rolling screenshot to all steps from the OLD screen
+          if (autoShotRef.current && lastScreenshotRef.current && oldTitle) {
             const snap = lastScreenshotRef.current;
             setSteps(prev => prev.map(s =>
               !s.screenshot && s.pageTitle === oldTitle ? { ...s, screenshot: snap } : s
@@ -907,8 +920,8 @@ const OracleFusion: React.FC = () => {
           // 3. Re-inject tracker into new SPA page
           await injectTracking(wv);
 
-          // 4. Capture screenshot of new screen once settled (1s)
-          setTimeout(async () => {
+          // 4. Capture screenshot of new screen once settled (1s) — auto mode only
+          if (autoShotRef.current) setTimeout(async () => {
             try {
               const shot = await wv.capturePage();
               const dataUrl = shot?.resize?.({ width: 960 })?.toDataURL?.() || shot?.toDataURL?.() || '';
@@ -1263,6 +1276,68 @@ const OracleFusion: React.FC = () => {
     }
   };
 
+  // ---- Manual screenshot capture (used when autoShot=false) ----
+  const handleManualCapture = async () => {
+    const wv = webviewRef.current;
+    if (!wv) { message.warning('WebView not ready'); return; }
+    try {
+      const shot = await wv.capturePage();
+      const dataUrl = shot?.resize?.({ width: 960 })?.toDataURL?.() || shot?.toDataURL?.() || '';
+      if (!dataUrl) { message.warning('Could not capture screenshot'); return; }
+      const title = currentPageTitleRef.current;
+      setSteps(prev => prev.map(s =>
+        s.pageTitle === title && !s.screenshot ? { ...s, screenshot: dataUrl } : s
+      ));
+      lastScreenshotRef.current = dataUrl;
+      message.success('Screenshot captured');
+    } catch (e: any) { message.error('Capture failed: ' + e.message); }
+  };
+
+  // ---- Insert screenshot between steps ----
+  const handleInsertScreenshot = async (afterIndex: number) => {
+    const wv = webviewRef.current;
+    if (!wv) { message.warning('WebView not ready'); return; }
+    try {
+      const shot = await wv.capturePage();
+      const dataUrl = shot?.resize?.({ width: 960 })?.toDataURL?.() || shot?.toDataURL?.() || '';
+      if (!dataUrl) { message.warning('Could not capture screenshot'); return; }
+      const title = await wv.executeJavaScript('document.title').catch(() => currentPageTitleRef.current);
+      const newStep: Step = {
+        id: Date.now() + Math.random() + '',
+        type: 'snapshot',
+        fieldName: title || 'Screenshot',
+        action: 'Snapshot',
+        value: '',
+        description: `Screenshot: ${title || 'Oracle Fusion'}`,
+        url: wv.getURL?.() || '',
+        pageTitle: title || currentPageTitleRef.current,
+        timestamp: Date.now(),
+        screenshot: dataUrl,
+      };
+      setSteps(prev => {
+        const arr = [...prev];
+        arr.splice(afterIndex + 1, 0, newStep);
+        return arr;
+      });
+      message.success('Screenshot inserted');
+    } catch (e: any) { message.error('Failed: ' + e.message); }
+  };
+
+  // ---- Drag-and-drop step reordering ----
+  const handleDragStart = (i: number) => setDragIdx(i);
+  const handleDragOver  = (e: React.DragEvent, i: number) => { e.preventDefault(); setDragOverIdx(i); };
+  const handleDrop      = (i: number) => {
+    if (dragIdx === null || dragIdx === i) { setDragIdx(null); setDragOverIdx(null); return; }
+    setSteps(prev => {
+      const arr = [...prev];
+      const [moved] = arr.splice(dragIdx, 1);
+      arr.splice(i, 0, moved);
+      return arr;
+    });
+    setDragIdx(null);
+    setDragOverIdx(null);
+  };
+
   return (
     <>
     <Layout style={{ height: 'calc(100vh - 64px)', display: 'flex', flexDirection: 'column', background: '#1a1a2e', overflow: 'hidden' }}>
@@ -1336,9 +1411,32 @@ const OracleFusion: React.FC = () => {
           </>
         ) : (
           <Tooltip title="Track navigation to generate User Manual / UAT Script">
-            <Button size="small" icon={<AimOutlined />} onClick={startTracking}
+            <Button size="small" icon={<AimOutlined />} onClick={() => { autoShotRef.current = autoShot; startTracking(); }}
               style={{ background: '#1565c0', border: 'none', color: '#fff' }}>
               Track Steps
+            </Button>
+          </Tooltip>
+        )}
+
+        {/* Auto screenshot toggle */}
+        <Tooltip title={autoShot ? 'Auto screenshot ON — screenshots captured automatically' : 'Auto screenshot OFF — click 📷 to capture manually'} placement="bottom">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 10, color: '#aaa' }}>Auto 📷</span>
+            <Switch
+              size="small"
+              checked={autoShot}
+              onChange={v => { setAutoShot(v); autoShotRef.current = v; }}
+              style={{ background: autoShot ? '#1565c0' : '#555' }}
+            />
+          </div>
+        </Tooltip>
+
+        {/* Manual capture button — visible when autoShot is off and tracking */}
+        {tracking && !autoShot && (
+          <Tooltip title="Capture screenshot now for current steps" placement="bottom">
+            <Button size="small" icon={<CameraOutlined />} onClick={handleManualCapture}
+              style={{ background: '#c77700', border: 'none', color: '#fff', fontWeight: 600 }}>
+              📷 Capture
             </Button>
           </Tooltip>
         )}
@@ -1427,7 +1525,7 @@ const OracleFusion: React.FC = () => {
             </div>
 
             {/* Steps List */}
-            <div className="wv-scroll" style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+            <div className="wv-scroll" style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
               {steps.length === 0 ? (
                 <div style={{ padding: 30, textAlign: 'center' }}>
                   <AimOutlined style={{ fontSize: 32, color: '#555', display: 'block', marginBottom: 10 }} />
@@ -1437,42 +1535,69 @@ const OracleFusion: React.FC = () => {
                 </div>
               ) : (
                 steps.map((s, i) => (
-                  <div key={s.id} style={{ padding: '8px 14px', borderBottom: '1px solid #222' }}>
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
-                      <span style={{
-                        width: 20, height: 20, borderRadius: '50%', background: '#333',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 10, color: '#aaa', flexShrink: 0, marginTop: 2,
-                      }}>{i + 1}</span>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <Tag color={STEP_COLORS[s.type]} style={{ fontSize: 10, marginBottom: 3 }}>{s.type}</Tag>
-                        <div style={{ fontSize: 12, color: '#e0e0e0', wordBreak: 'break-word', lineHeight: 1.4 }}>{s.description}</div>
-                        {s.pageTitle && <div style={{ fontSize: 10, color: '#666', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.pageTitle}</div>}
-                        {s.screenshot && (
-                          <Tooltip title="Click to annotate" placement="left">
-                            <div
-                              style={{ position: 'relative', marginTop: 5, cursor: 'pointer' }}
-                              onClick={() => setAnnotatingStepId(s.id)}
-                            >
-                              <img
-                                src={s.screenshot}
-                                alt={`step ${i + 1}`}
-                                style={{ width: '100%', borderRadius: 4, border: '1px solid #333', display: 'block' }}
-                              />
-                              <div style={{
-                                position: 'absolute', top: 4, right: 4,
-                                background: 'rgba(0,0,0,0.55)', borderRadius: 3,
-                                padding: '1px 6px', fontSize: 10, color: '#fff',
-                                pointerEvents: 'none',
-                              }}>
-                                ✏ annotate
+                  <React.Fragment key={s.id}>
+                    {/* Step card */}
+                    <div
+                      draggable
+                      onDragStart={() => handleDragStart(i)}
+                      onDragOver={e => handleDragOver(e, i)}
+                      onDrop={() => handleDrop(i)}
+                      onDragEnd={() => { setDragIdx(null); setDragOverIdx(null); }}
+                      style={{
+                        padding: '7px 10px 7px 8px',
+                        borderBottom: '1px solid #222',
+                        background: dragOverIdx === i ? '#2a2a4a' : 'transparent',
+                        opacity: dragIdx === i ? 0.4 : 1,
+                        cursor: 'grab',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                        {/* Drag handle + step number */}
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, flexShrink: 0, marginTop: 2 }}>
+                          <span style={{ fontSize: 9, color: '#555', lineHeight: 1 }}>⠿</span>
+                          <span style={{
+                            width: 18, height: 18, borderRadius: '50%', background: '#333',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: 9, color: '#aaa',
+                          }}>{i + 1}</span>
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <Tag color={STEP_COLORS[s.type]} style={{ fontSize: 10, marginBottom: 3 }}>{s.type}</Tag>
+                          <div style={{ fontSize: 11, color: '#e0e0e0', wordBreak: 'break-word', lineHeight: 1.4 }}>{s.description}</div>
+                          {s.pageTitle && <div style={{ fontSize: 10, color: '#555', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.pageTitle}</div>}
+                          {s.screenshot && (
+                            <Tooltip title="Click to annotate" placement="left">
+                              <div style={{ position: 'relative', marginTop: 5, cursor: 'pointer' }} onClick={() => setAnnotatingStepId(s.id)}>
+                                <img src={s.screenshot} alt={`step ${i + 1}`}
+                                  style={{ width: '100%', borderRadius: 4, border: '1px solid #333', display: 'block' }} />
+                                <div style={{
+                                  position: 'absolute', top: 4, right: 4,
+                                  background: 'rgba(0,0,0,0.55)', borderRadius: 3,
+                                  padding: '1px 6px', fontSize: 10, color: '#fff', pointerEvents: 'none',
+                                }}>✏ annotate</div>
                               </div>
-                            </div>
-                          </Tooltip>
-                        )}
+                            </Tooltip>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
+
+                    {/* Insert screenshot button between steps */}
+                    <Tooltip title="Insert a screenshot here" placement="right">
+                      <div
+                        onClick={() => handleInsertScreenshot(i)}
+                        style={{
+                          height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          cursor: 'pointer', opacity: 0.3, fontSize: 10, color: '#7cb9e8',
+                          borderBottom: '1px dashed #333',
+                        }}
+                        onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+                        onMouseLeave={e => (e.currentTarget.style.opacity = '0.3')}
+                      >
+                        + 📷 insert screenshot here
+                      </div>
+                    </Tooltip>
+                  </React.Fragment>
                 ))
               )}
             </div>
@@ -1521,20 +1646,50 @@ const OracleFusion: React.FC = () => {
                 </Tooltip>
               </div>
 
-              <Button
-                block
-                icon={<DeleteOutlined />}
-                onClick={() => { setSteps([]); message.info('Steps cleared'); }}
-                disabled={!steps.length}
-                style={{ background: '#333', border: 'none', color: steps.length ? '#ff6b35' : '#555' }}
-              >
-                Clear Steps
-              </Button>
+              {/* Preview + Clear row */}
+              <div style={{ display: 'flex', gap: 4 }}>
+                <Button
+                  style={{ flex: 1, background: steps.length ? '#6a1b9a' : '#333', border: 'none', color: '#fff', fontSize: 12 }}
+                  onClick={() => setPreviewOpen(true)}
+                  disabled={!steps.length}
+                >
+                  👁 Preview
+                </Button>
+                <Button
+                  icon={<DeleteOutlined />}
+                  onClick={() => { setSteps([]); message.info('Steps cleared'); }}
+                  disabled={!steps.length}
+                  style={{ background: '#333', border: 'none', color: steps.length ? '#ff6b35' : '#555' }}
+                />
+              </div>
             </div>
           </div>
         )}
       </div>
     </Layout>
+
+    {/* ── User Manual Preview Modal ── */}
+    <Modal
+      open={previewOpen}
+      onCancel={() => setPreviewOpen(false)}
+      width="92vw"
+      style={{ top: 16 }}
+      title="User Manual Preview"
+      footer={
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <Button onClick={handleGenerateManual} icon={<FileTextOutlined />}>Download HTML</Button>
+          <Button onClick={handleGenerateWordManual} style={{ background: '#1565c0', color: '#fff', border: 'none' }}>Download Word</Button>
+          <Button onClick={() => setPreviewOpen(false)}>Close</Button>
+        </div>
+      }
+    >
+      <iframe
+        srcDoc={steps.length ? generateUserManual(steps) : ''}
+        style={{ width: '100%', height: 'calc(90vh - 130px)', border: 'none', borderRadius: 4 }}
+        sandbox="allow-same-origin"
+        title="User Manual Preview"
+      />
+    </Modal>
 
     {/* ── Credentials Setup Modal ── */}
     <Modal
