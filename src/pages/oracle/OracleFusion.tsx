@@ -555,8 +555,8 @@ const STEP_COLORS: Record<string, string> = { click: 'blue', input: 'green', nav
 const OracleFusion: React.FC = () => {
   const navigate = useNavigate();
   const webviewRef = useRef<any>(null);
-  const [url, setUrl] = useState('');
-  const [inputUrl, setInputUrl] = useState('');
+  const [url, setUrl] = useState('https://iacney-test.fa.ocs.oraclecloud.com/');
+  const [inputUrl, setInputUrl] = useState('https://iacney-test.fa.ocs.oraclecloud.com/');
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoFwd, setCanGoFwd] = useState(false);
   const [loading, setLoading] = useState(false);
